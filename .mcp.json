@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codeburn": {
+      "command": "npx",
+      "args": ["-y", "codeburn", "mcp"]
+    }
+  }
+}
