@@ -1,0 +1,13 @@
+apps/
+apps/api
+apps/web
+apps/worker
+services/ai-engine
+packages/*/src
+infra/cloudflared
+infra/scripts
+infra/vm1
+infra/vm2
+tests/*
+docs/evidence/phase-0 through phase-11
+.github/workflows
