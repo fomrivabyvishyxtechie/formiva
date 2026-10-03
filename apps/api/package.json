@@ -1,0 +1,23 @@
+{
+  "name": "@formiva/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@formiva/config": "workspace:*",
+    "@formiva/contracts": "workspace:*",
+    "@formiva/observability": "workspace:*",
+    "fastify": "^5.4.0",
+    "zod": "^3.23.8"
+  }
+}

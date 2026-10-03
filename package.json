@@ -1,6 +1,35 @@
 {
+  "name": "formiva",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "pnpm --filter @formiva/api dev",
+    "build": "pnpm -r --if-present run build",
+    "lint": "pnpm -r --if-present run lint",
+    "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
+    "format:check": "prettier --check \"apps/**/*.ts\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
+    "test": "pnpm -r --if-present run test",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "verify": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
+  },
   "dependencies": {
     "framer-motion": "^14.0.0",
     "headroom-ai": "^0.39.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.71.0",
+    "vitest": "^3.2.4"
   }
 }
