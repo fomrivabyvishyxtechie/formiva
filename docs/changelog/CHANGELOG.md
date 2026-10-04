@@ -5,6 +5,7 @@ All meaningful engineering changes should be summarized here.
 ## Unreleased
 
 - Implemented the Phase 2.2 Fastify auth plugin: Clerk JWT verification, database-backed workspace membership/role checks, selector-only workspace headers, and tenant-scoped transaction callbacks.
+- Fixed repository-wide formatting issues in `packages/db/test/foundation.test.ts`.
 - Added synthetic auth tests covering missing/expired tokens, invalid issuer/audience/authorized party, unknown identity, foreign workspace, insufficient role, and valid membership.
 - Implemented Phase 2.1 Database Foundation: migration runner with checksums and tenant-scoped transaction helper.
 - Verified Phase 2.1 against ephemeral local PostgreSQL 16: migration ordering/reruns/checksum rejection, rollback, tenant context and cleanup, RLS isolation, and runtime-role privileges all pass.

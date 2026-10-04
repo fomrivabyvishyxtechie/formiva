@@ -23,14 +23,18 @@ if (
 
 const pool = new Pool({ connectionString: databaseUrl, max: 1 });
 const migrationsDirectory = path.resolve(__dirname, '../migrations');
-const migrationFiles = fs.readdirSync(migrationsDirectory)
+const migrationFiles = fs
+  .readdirSync(migrationsDirectory)
   .filter((filename) => /^\d+_.+\.sql$/.test(filename) && filename !== '009_migration_metadata.sql')
   .sort((left, right) => Number(left.split('_')[0]) - Number(right.split('_')[0]));
 const versions = migrationFiles.map((filename) => Number(filename.split('_')[0]));
 const migrationChecksums = new Map(
   migrationFiles.map((filename) => [
     Number(filename.split('_')[0]),
-    crypto.createHash('sha256').update(fs.readFileSync(path.join(migrationsDirectory, filename))).digest('hex'),
+    crypto
+      .createHash('sha256')
+      .update(fs.readFileSync(path.join(migrationsDirectory, filename)))
+      .digest('hex'),
   ]),
 );
 
@@ -39,15 +43,27 @@ let fixtureKeys: string[] = [];
 let fixturesCreated = false;
 
 async function test(): Promise<void> {
-  const connection = await pool.query<{ version: string; current_database: string; rolsuper: boolean }>(
+  const connection = await pool.query<{
+    version: string;
+    current_database: string;
+    rolsuper: boolean;
+  }>(
     `SELECT version(), current_database(), role.rolsuper
        FROM pg_roles role
       WHERE role.rolname = current_user`,
   );
   assert.match(connection.rows[0].version, /^PostgreSQL 16\./, 'tests require PostgreSQL 16');
   assert.equal(connection.rows[0].current_database, 'formiva_test');
-  assert.equal(connection.rows[0].rolsuper, true, 'test role must be able to create migration roles');
-  assert.deepEqual(versions, [1, 2, 3, 4, 5, 6, 7, 8], 'migration filenames must be in numbered order');
+  assert.equal(
+    connection.rows[0].rolsuper,
+    true,
+    'test role must be able to create migration roles',
+  );
+  assert.deepEqual(
+    versions,
+    [1, 2, 3, 4, 5, 6, 7, 8],
+    'migration filenames must be in numbered order',
+  );
 
   const metadataTable = await pool.query<{ exists: boolean }>(
     "SELECT to_regclass('public.schema_migrations') IS NOT NULL AS exists",
@@ -56,7 +72,8 @@ async function test(): Promise<void> {
     ? await pool.query<{ version: number }>('SELECT version FROM schema_migrations')
     : { rows: [] as { version: number }[] };
   const expectedApplyOrder = migrationFiles.filter(
-    (filename) => !previouslyApplied.rows.some((row) => Number(row.version) === Number(filename.split('_')[0])),
+    (filename) =>
+      !previouslyApplied.rows.some((row) => Number(row.version) === Number(filename.split('_')[0])),
   );
   const appliedInOrder: string[] = [];
   const originalLog = console.log;
@@ -71,7 +88,11 @@ async function test(): Promise<void> {
   } finally {
     console.log = originalLog;
   }
-  assert.deepEqual(appliedInOrder, expectedApplyOrder, 'migrations should execute in numeric order');
+  assert.deepEqual(
+    appliedInOrder,
+    expectedApplyOrder,
+    'migrations should execute in numeric order',
+  );
 
   const recordsAfterApply = await pool.query(
     'SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version',
@@ -89,16 +110,35 @@ async function test(): Promise<void> {
   const recordsAfterRerun = await pool.query(
     'SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version',
   );
-  assert.deepEqual(recordsAfterRerun.rows, recordsAfterApply.rows, 'rerunning must not alter applied records');
+  assert.deepEqual(
+    recordsAfterRerun.rows,
+    recordsAfterApply.rows,
+    'rerunning must not alter applied records',
+  );
 
   const originalChecksum = recordsAfterApply.rows[0].checksum as string;
-  await pool.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', ['invalid-test-checksum', 1]);
+  await pool.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
+    'invalid-test-checksum',
+    1,
+  ]);
   try {
-    await assert.rejects(runMigrations(pool), /Checksum mismatch for migration 001_foundation\.sql/);
-    const mismatchRecord = await pool.query('SELECT checksum FROM schema_migrations WHERE version = 1');
-    assert.equal(mismatchRecord.rows[0].checksum, 'invalid-test-checksum', 'failed migration transaction must roll back');
+    await assert.rejects(
+      runMigrations(pool),
+      /Checksum mismatch for migration 001_foundation\.sql/,
+    );
+    const mismatchRecord = await pool.query(
+      'SELECT checksum FROM schema_migrations WHERE version = 1',
+    );
+    assert.equal(
+      mismatchRecord.rows[0].checksum,
+      'invalid-test-checksum',
+      'failed migration transaction must roll back',
+    );
   } finally {
-    await pool.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [originalChecksum, 1]);
+    await pool.query('UPDATE schema_migrations SET checksum = $1 WHERE version = $2', [
+      originalChecksum,
+      1,
+    ]);
   }
 
   const suffix = crypto.randomUUID();
@@ -145,11 +185,19 @@ async function test(): Promise<void> {
     [fixtureWorkspaceIds[0], fixtureKeys[0]],
     [fixtureWorkspaceIds[1], fixtureKeys[1]],
   ]) {
-    const visibleTemplates = await withTenant(pool, workspaceId, crypto.randomUUID(), async (client) => {
-      await client.query('SET LOCAL ROLE formiva_app');
-      return client.query<{ key: string }>('SELECT key FROM form_templates');
-    });
-    assert.deepEqual(visibleTemplates.rows.map((row) => row.key), [expectedKey]);
+    const visibleTemplates = await withTenant(
+      pool,
+      workspaceId,
+      crypto.randomUUID(),
+      async (client) => {
+        await client.query('SET LOCAL ROLE formiva_app');
+        return client.query<{ key: string }>('SELECT key FROM form_templates');
+      },
+    );
+    assert.deepEqual(
+      visibleTemplates.rows.map((row) => row.key),
+      [expectedKey],
+    );
   }
 
   const cleanedContext = await pool.query<{ workspace_id: string | null; user_id: string | null }>(
@@ -160,7 +208,10 @@ async function test(): Promise<void> {
     [null, ''].includes(cleanedContext.rows[0].workspace_id),
     'workspace context must not survive the transaction',
   );
-  assert.ok([null, ''].includes(cleanedContext.rows[0].user_id), 'user context must not survive the transaction');
+  assert.ok(
+    [null, ''].includes(cleanedContext.rows[0].user_id),
+    'user context must not survive the transaction',
+  );
 
   const rollbackKey = `phase21-${suffix}-rollback`;
   await assert.rejects(
@@ -180,7 +231,11 @@ async function test(): Promise<void> {
   );
   assert.equal(rolledBackTemplate.rowCount, 0, 'callback error must roll back transaction writes');
 
-  const runtimeRoles = await pool.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+  const runtimeRoles = await pool.query<{
+    rolname: string;
+    rolsuper: boolean;
+    rolbypassrls: boolean;
+  }>(
     `SELECT rolname, rolsuper, rolbypassrls
        FROM pg_roles
       WHERE rolname = ANY($1::text[])`,
@@ -203,7 +258,9 @@ test()
   })
   .finally(async () => {
     if (fixturesCreated) {
-      await pool.query('DELETE FROM form_templates WHERE workspace_id = ANY($1::uuid[])', [fixtureWorkspaceIds]);
+      await pool.query('DELETE FROM form_templates WHERE workspace_id = ANY($1::uuid[])', [
+        fixtureWorkspaceIds,
+      ]);
       await pool.query('DELETE FROM workspaces WHERE id = ANY($1::uuid[])', [fixtureWorkspaceIds]);
     }
     await pool.end();
