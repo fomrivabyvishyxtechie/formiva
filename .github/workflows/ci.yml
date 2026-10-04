@@ -44,42 +44,42 @@ jobs:
 
       - name: Validate Docker Compose
         env:
-          # Use synthetic variables to pass Compose validation
-          POSTGRES_PASSWORD: dummy_password
-          AI_ENGINE_KEY: dummy_key
+          # VM1 synthetic variables
+          DB_NAME: formiva_db
+          DB_USER: formiva_user
+          DB_PASSWORD: dummy_password
+          # VM2 synthetic variable
+          AI_HMAC_SECRET: dummy_hmac_secret
         run: |
           docker compose -f infra/vm1/docker-compose.yml config
           docker compose -f infra/vm2/docker-compose.yml config
 
       - name: Secret Scan
-        # Using a precise pattern scanner. Note: 'trufflehog' is preferred,
-        # here we use a pattern-based grep for sensitive placeholders/patterns
-        # to ensure it fails on deliberate fake secrets
+        # Using precise grep -Ei pattern, scanning tracked files
         run: |
-          # Fails if patterns are found
-          ! git grep -E "(?i)(api_key|secret|password|token)[[:space:]]*[:=][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- .
+          ! git grep -Ei "(api_key|secret|password|token)[[:space:]]*[=:][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- .
 
-      - name: Add Fake Secret for Verification
+      - name: Verify Secret Scan Fails with External Secret
         run: |
-          echo "API_KEY=supersecret1234567890" > FAKE_SECRET.txt
-
-      - name: Verify Secret Scan Fails
-        run: |
-          if git grep -E "(?i)(api_key|secret|password|token)[[:space:]]*[:=][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- .; then
-            echo "Secret successfully detected."
+          trap "rm -f /tmp/FAKE_SECRET.txt" EXIT
+          echo "API_KEY=supersecret1234567890" > /tmp/FAKE_SECRET.txt
+          # Scan repo
+          git grep -Ei "(api_key|secret|password|token)[[:space:]]*[=:][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- . || echo "Repo scan passed (no secrets)."
+          # Scan external secret file explicitly
+          if grep -Ei "(api_key|secret|password|token)[[:space:]]*[=:][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" /tmp/FAKE_SECRET.txt; then
+            echo "External secret successfully detected."
           else
             echo "Secret detection failed."
             exit 1
           fi
-          rm FAKE_SECRET.txt
 
       - name: Semgrep
-        uses: semgrep/semgrep-action@v1
+        uses: semgrep/semgrep-action@v2.6.1
         with:
           generateSarif: "1"
 
       - name: Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: 'fs'
           ignore-unfixed: true
