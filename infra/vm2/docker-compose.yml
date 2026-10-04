@@ -1,0 +1,67 @@
+# VM2: Formiva Isolated AI Engine
+# Includes: AI Engine, Lightweight Metrics
+# Platform: linux/arm64
+# Security: No cloud credentials, no unrestricted internet access
+
+services:
+  ai-engine:
+    build:
+      context: ../..
+      dockerfile: services/ai-engine/Dockerfile
+    container_name: formiva-ai-engine
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      HMAC_SECRET: ${AI_HMAC_SECRET:?AI_HMAC_SECRET is required}
+    # No public port mapping
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Non-root user
+    user: "1000:1000"
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ai_internal
+
+  metrics:
+    image: prom/node-exporter:latest
+    container_name: formiva-metrics
+    restart: always
+    expose:
+      - "9100"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+    user: nobody
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+    networks:
+      - ai_internal
+
+networks:
+  ai_internal:
+    internal: true # Restricted network
