@@ -1,4 +1,5 @@
 import Fastify from 'fastify';
+import { Pool } from 'pg';
 
 import { loadConfig } from '@formiva/config';
 import { createProblemDetails } from '@formiva/contracts';
@@ -8,14 +9,29 @@ import {
   getOrCreateRequestId,
   safeSerializeError,
 } from '@formiva/observability';
+import authPlugin, { type AuthPluginOptions } from './auth.js';
 
-export function buildApp(env: Record<string, string | undefined> = process.env) {
+export function buildApp(
+  env: Record<string, string | undefined> = process.env,
+  dependencies: { pool?: Pool; auth?: Pick<AuthPluginOptions, 'jwksFetch'> } = {},
+) {
   const rawEnvironment = { ...process.env, ...env };
   const config = loadConfig(rawEnvironment);
   const app = Fastify({
     logger: config.NODE_ENV !== 'test',
     requestIdHeader: 'x-request-id',
     trustProxy: true,
+  });
+
+  app.register(authPlugin, {
+    pool: dependencies.pool,
+    issuer: rawEnvironment.CLERK_ISSUER,
+    audience: rawEnvironment.CLERK_AUDIENCE,
+    jwksUrl: rawEnvironment.CLERK_JWKS_URL,
+    authorizedParties: rawEnvironment.CLERK_AUTHORIZED_PARTIES?.split(',')
+      .map((party) => party.trim())
+      .filter(Boolean),
+    jwksFetch: dependencies.auth?.jwksFetch,
   });
 
   app.addHook('onRequest', async (request, reply) => {
@@ -31,7 +47,11 @@ export function buildApp(env: Record<string, string | undefined> = process.env) 
   });
 
   app.setErrorHandler((error, request, reply) => {
-    const fastifyError = error as Error & { statusCode?: number };
+    const fastifyError = error as Error & {
+      statusCode?: number;
+      publicMessage?: string;
+      code?: string;
+    };
     const correlationId = getOrCreateCorrelationId(
       request.headers as Record<string, string | string[] | undefined>,
       request.id ?? generateCorrelationId(),
@@ -41,21 +61,39 @@ export function buildApp(env: Record<string, string | undefined> = process.env) 
         ? fastifyError.statusCode
         : 500;
     const serialized = safeSerializeError(error);
+    const titles: Record<number, string> = {
+      400: 'Bad request',
+      401: 'Unauthorized',
+      403: 'Forbidden',
+      404: 'Resource not found',
+      503: 'Service unavailable',
+    };
+    const problemTypes: Record<number, string> = {
+      400: 'bad-request',
+      401: 'unauthorized',
+      403: 'forbidden',
+      404: 'not-found',
+      503: 'service-unavailable',
+    };
+    if (statusCode === 401) reply.header('www-authenticate', 'Bearer');
 
     const problem = createProblemDetails({
-      type:
-        statusCode === 404
-          ? 'https://api.formiva.invalid/problems/not-found'
-          : 'https://api.formiva.invalid/problems/internal-error',
-      title: statusCode === 404 ? 'Resource not found' : 'Internal server error',
+      type: `https://api.formiva.invalid/problems/${problemTypes[statusCode] ?? 'internal-error'}`,
+      title: titles[statusCode] ?? 'Internal server error',
       status: statusCode,
-      detail: statusCode === 500 ? 'An unexpected error occurred.' : String(serialized.message),
+      detail:
+        statusCode === 500
+          ? 'An unexpected error occurred.'
+          : (fastifyError.publicMessage ?? String(serialized.message)),
       instance: request.raw.url,
       correlation_id: correlationId,
       errors: [
         {
-          code: statusCode === 404 ? 'not_found' : 'internal_error',
-          message: String(serialized.message),
+          code: fastifyError.code ?? (statusCode === 404 ? 'not_found' : 'request_error'),
+          message:
+            statusCode === 500
+              ? 'An unexpected error occurred.'
+              : (fastifyError.publicMessage ?? String(serialized.message)),
         },
       ],
     });
@@ -92,8 +130,17 @@ export function buildApp(env: Record<string, string | undefined> = process.env) 
 }
 
 export async function startServer() {
-  const app = buildApp();
-  await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
+  const pool = process.env.DATABASE_URL
+    ? new Pool({ connectionString: process.env.DATABASE_URL })
+    : undefined;
+  const app = buildApp(process.env, { pool });
+  if (pool) app.addHook('onClose', () => pool.end());
+  try {
+    await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });
+  } catch (error) {
+    if (pool) await pool.end();
+    throw error;
+  }
   return app;
 }
 
