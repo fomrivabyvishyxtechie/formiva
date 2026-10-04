@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Format Check
+        run: pnpm run format:check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Unit Tests
+        run: pnpm run test
+
+      - name: Bash Syntax/Tests Check
+        run: |
+          find infra/scripts -name "*.sh" -exec bash -n {} +
+          find tests -name "*.sh" -exec bash -n {} +
+
+      - name: Validate Docker Compose
+        env:
+          # Use synthetic variables to pass Compose validation
+          POSTGRES_PASSWORD: dummy_password
+          AI_ENGINE_KEY: dummy_key
+        run: |
+          docker compose -f infra/vm1/docker-compose.yml config
+          docker compose -f infra/vm2/docker-compose.yml config
+
+      - name: Secret Scan
+        # Using a precise pattern scanner. Note: 'trufflehog' is preferred,
+        # here we use a pattern-based grep for sensitive placeholders/patterns
+        # to ensure it fails on deliberate fake secrets
+        run: |
+          # Fails if patterns are found
+          ! git grep -E "(?i)(api_key|secret|password|token)[[:space:]]*[:=][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- .
+
+      - name: Add Fake Secret for Verification
+        run: |
+          echo "API_KEY=supersecret1234567890" > FAKE_SECRET.txt
+
+      - name: Verify Secret Scan Fails
+        run: |
+          if git grep -E "(?i)(api_key|secret|password|token)[[:space:]]*[:=][[:space:]]*['\"]?[a-zA-Z0-9_-]{16,}['\"]?" -- .; then
+            echo "Secret successfully detected."
+          else
+            echo "Secret detection failed."
+            exit 1
+          fi
+          rm FAKE_SECRET.txt
+
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          generateSarif: "1"
+
+      - name: Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
