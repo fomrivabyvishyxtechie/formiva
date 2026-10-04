@@ -7,26 +7,40 @@ set -euo pipefail
 # Configuration
 DRY_RUN=true
 APPLY_UPDATES=false
+FIREWALL_MODE="defer"
 BACKUP_DIR="/etc/formiva/backup/$(date +%Y%m%d_%H%M%S)"
 
 # Help/Usage
 show_help() {
-    echo "Usage: sudo $0 [--dry-run | --apply] [--apply-updates]"
+    echo "Usage: sudo $0 [--dry-run | --apply] [--apply-updates] [--firewall-mode=defer|configure]"
     echo "  --dry-run        (Default) Simulate actions without changes."
     echo "  --apply          Actually apply hardening changes (requires safety confirmation)."
     echo "  --apply-updates  Also apply package security updates (requires --apply)."
+    echo "  --firewall-mode  'defer' (default) or 'configure' (requires --apply)."
     exit 0
 }
 
 # Parse Args
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --dry-run) DRY_RUN=true; shift ;;
         --apply) DRY_RUN=false; shift ;;
         --apply-updates) APPLY_UPDATES=true; shift ;;
+        --firewall-mode=*) FIREWALL_MODE="${1#*=}"; shift ;;
         --help) show_help ;;
-        *) echo "Unknown option: $1"; show_help ;;
+        *) echo "FAIL: Unknown option: $1"; show_help; exit 1 ;;
     esac
 done
+
+# Validate Argument Logic
+if [[ "$APPLY_UPDATES" == true && "$DRY_RUN" == true ]]; then
+    echo "FAIL: --apply-updates requires --apply and cannot be used in dry-run mode."
+    exit 1
+fi
+if [[ "$FIREWALL_MODE" == "configure" && "$DRY_RUN" == true ]]; then
+    echo "FAIL: --firewall-mode=configure requires --apply and cannot be used in dry-run mode."
+    exit 1
+fi
 
 # OS Validation
 if ! grep -q "Oracle Linux Server release 9" /etc/oracle-release 2>/dev/null; then
@@ -40,11 +54,26 @@ if [[ "$DRY_RUN" == false ]]; then
         echo "FAIL: Must run as root to apply changes."
         exit 1
     fi
+
     # SSH Operator Safety
-    if [[ -z "${SSH_CONNECTION:-}" ]]; then
-        echo "FAIL: Not running over SSH. Hardening aborted to prevent lockout."
+    IS_SSH=false
+    if [[ -n "${XDG_SESSION_ID:-}" ]]; then
+        if [[ "$(loginctl show-session "${XDG_SESSION_ID}" -p Remote --value 2>/dev/null)" == "yes" ]]; then
+            IS_SSH=true
+        fi
+    fi
+    if [[ "$IS_SSH" == false ]]; then
+        TTY=$(readlink /proc/self/fd/0 2>/dev/null | sed 's|^/dev/||' || echo "unknown")
+        if who | grep -qE "^.*$TTY.*\(.*\).*$"; then
+            IS_SSH=true
+        fi
+    fi
+
+    if [[ "$IS_SSH" == false ]]; then
+        echo "FAIL: Not running over SSH or SSH session not detectable. Hardening aborted."
         exit 1
     fi
+
     echo "WARNING: Applying hardening to the host."
     read -p "Have you verified a secondary administrative SSH session? [y/N]: " confirm
     if [[ "$confirm" != "y" ]]; then
@@ -57,6 +86,8 @@ fi
 # Helpers
 log_pass() { echo "PASS: $1"; }
 log_fail() { echo "FAIL: $1"; exit 1; }
+log_warn() { echo "WARN: $1"; }
+log_skip() { echo "SKIP: $1"; }
 
 backup_file() {
     local file=$1
@@ -124,31 +155,41 @@ fi
 log_pass "Sudoers drop-in configured."
 
 # Control: Firewall (firewalld)
-echo "Configuring Firewalld..."
-if command -v firewall-cmd >/dev/null; then
-    if [[ "$DRY_RUN" == false ]]; then
-        # Preserve SSH
-        firewall-cmd --permanent --add-service=ssh
-        if ! firewall-cmd --check-config; then
-            echo "FAIL: Firewalld config invalid. Rolling back."
-            firewall-cmd --reload # Reload to last known good
-            exit 1
+echo "Configuring Firewall (Mode: $FIREWALL_MODE)..."
+if [[ "$FIREWALL_MODE" == "defer" ]]; then
+    log_warn "Host firewall protection is PENDING. Cloudflare Tunnel ingress active but host-level firewall protection is deferred."
+elif [[ "$FIREWALL_MODE" == "configure" ]]; then
+    if command -v firewall-cmd >/dev/null; then
+        if [[ "$DRY_RUN" == false ]]; then
+            # Preserve SSH
+            firewall-cmd --permanent --add-service=ssh
+            if ! firewall-cmd --check-config; then
+                echo "FAIL: Firewalld config invalid. Rolling back."
+                firewall-cmd --reload # Reload to last known good
+                exit 1
+            fi
+            firewall-cmd --reload
         fi
-        firewall-cmd --reload
+        log_pass "Firewalld configured."
+    else
+        log_fail "Firewalld not installed, but configure mode requested."
     fi
-    log_pass "Firewalld configured."
 else
-    echo "SKIP: firewalld not installed."
+    log_fail "Invalid firewall mode: $FIREWALL_MODE"
 fi
 
 # Control: Auditd
 echo "Configuring Auditd..."
 AUDIT_RULES="/etc/audit/rules.d/formiva.rules"
+FORMIVA_DIR="/etc/formiva"
+
 if command -v auditctl >/dev/null; then
+    # Base mandatory rules
     if [[ "$DRY_RUN" == false ]]; then
         backup_file "$AUDIT_RULES" || true
-        # Essential events for Oracle Linux 9
-        cat <<EOF > "$AUDIT_RULES"
+        TEMP_RULES=$(mktemp)
+
+        cat <<EOF > "$TEMP_RULES"
 # Remove existing rules
 -D
 # Buffer size
@@ -176,21 +217,34 @@ if command -v auditctl >/dev/null; then
 # Service/Unit Changes
 -w /usr/lib/systemd/system/ -p wa -k systemd
 -w /etc/systemd/system/ -p wa -k systemd
-
-# Formiva Hardening Changes
--w /infra/scripts/harden-oracle-linux9.sh -p wa -k formiva_harden
--w /etc/formiva/ -p wa -k formiva_config
 EOF
-        if ! augenrules --check; then
-            echo "FAIL: Audit rules invalid. Rolling back."
-            restore_file "$AUDIT_RULES" || rm -f "$AUDIT_RULES"
-            exit 1
+
+        # Optional Formiva path rules
+        if [[ -d "$FORMIVA_DIR" ]]; then
+            echo "-w $FORMIVA_DIR/ -p wa -k formiva_config" >> "$TEMP_RULES"
         fi
+
+        # Validate before loading
+        if ! auditctl -R "$TEMP_RULES" 2>/dev/null; then
+             echo "FAIL: Generated audit rules invalid. Rolling back."
+             rm -f "$TEMP_RULES"
+             exit 1
+        fi
+
+        # Apply
+        mv "$TEMP_RULES" "$AUDIT_RULES"
         augenrules --load
     fi
-    log_pass "Auditd configured."
+    log_pass "Host auditd rules loaded."
+
+    # Report on optional rules
+    if [[ -d "$FORMIVA_DIR" ]]; then
+        log_pass "Formiva path (/etc/formiva/) audit rules enabled."
+    else
+        log_skip "Formiva path (/etc/formiva/) not found; audit rules skipped."
+    fi
 else
-    echo "SKIP: auditd (auditctl) not installed."
+    log_skip "auditd (auditctl) not installed."
 fi
 
 # Control: Security Updates

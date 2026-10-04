@@ -16,18 +16,16 @@ This runbook explains how to execute the `infra/scripts/harden-oracle-linux9.sh`
     `sudo ./harden-oracle-linux9.sh --apply`
 4.  **Security Updates** (Optional): Apply security updates (use with caution):
     `sudo ./harden-oracle-linux9.sh --apply --apply-updates`
+5.  **Firewall Configuration** (Optional): By default, firewall configuration is deferred. To explicitly configure:
+    `sudo ./harden-oracle-linux9.sh --apply --firewall-mode=configure`
 
 ## Controls Implemented
 - **SSH**: Root/Password login disabled; Key-based access enforced. Config validated before restart.
 - **Sudo**: Syntax validated via `visudo`. Minimal `requiretty` configured via drop-in (`/etc/sudoers.d/formiva`).
-- **Firewall**: `firewalld` configured to preserve SSH, validated before reload.
-- **Auditd**: Rules configured for sensitive OS events:
-    - Authentication, SSH, and identity changes.
-    - Sudoers changes.
-    - Privilege escalation (`setuid`/`setgid`).
-    - Firewall and systemd configuration changes.
-    - Hardening script/config modifications.
-    Validated via `augenrules` before loading.
+- **Firewall**:
+    - Default (`defer`): Host firewall protection is pending. Cloudflare Tunnel ingress active but host-level firewall protection is deferred. **Must be enabled before production/sensitive-data use.**
+    - `configure` mode: Configures `firewalld` to preserve SSH, validated before reload.
+- **Auditd**: Rules configured for sensitive OS events (Auth, Sudoers, PrivEsc, Firewall, Config changes). Only existing paths are audited. Validated via `augenrules`.
 - **Updates**: Explicit `--apply-updates` flag required.
 
 ## Rollback
