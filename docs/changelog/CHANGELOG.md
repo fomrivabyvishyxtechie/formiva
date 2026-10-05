@@ -4,6 +4,7 @@ All meaningful engineering changes should be summarized here.
 
 ## Unreleased
 
+- Added the Phase 2.4 tenant-isolation suite for registered API routes and app-role RLS checks. The current route and database checks pass; unimplemented contract operations are documented as pending/not applicable in `docs/evidence/phase-2/phase-2-4-tenant-isolation.md`.
 - Hardened API Clerk configuration: missing configuration now fails startup outside test, and synthetic auth bypass is gated on both `NODE_ENV=test` and explicit `testMode`.
 - Updated workspace authentication to use the typed authenticated identity and added coverage for missing configuration, disabled production test mode, unauthenticated requests, and synthetic workspace requests.
 - Verified Phase 2.3 against disposable local PostgreSQL 16: database tests passed, all 16 API tests passed, and format, lint, typecheck, API build, and `git diff --check` passed. See `docs/evidence/phase-2/phase-2-3-verification.md`.
