@@ -9,14 +9,30 @@ import {
   getOrCreateRequestId,
   safeSerializeError,
 } from '@formiva/observability';
+import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 
-export function buildApp(
+export async function buildApp(
   env: Record<string, string | undefined> = process.env,
-  dependencies: { pool?: Pool; auth?: Pick<AuthPluginOptions, 'jwksFetch'> } = {},
+  dependencies: { pool?: Pool; auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode'> } = {},
 ) {
   const rawEnvironment = { ...process.env, ...env };
   const config = loadConfig(rawEnvironment);
+  const testMode = rawEnvironment.NODE_ENV === 'test' && dependencies.auth?.testMode === true;
+  const authorizedParties = rawEnvironment.CLERK_AUTHORIZED_PARTIES?.split(',')
+    .map((party) => party.trim())
+    .filter(Boolean);
+  const missingClerkConfiguration = [
+    !rawEnvironment.CLERK_ISSUER && 'CLERK_ISSUER',
+    !rawEnvironment.CLERK_AUDIENCE && 'CLERK_AUDIENCE',
+    !rawEnvironment.CLERK_JWKS_URL && 'CLERK_JWKS_URL',
+    !authorizedParties?.length && 'CLERK_AUTHORIZED_PARTIES',
+  ].filter((name): name is string => Boolean(name));
+
+  if (rawEnvironment.NODE_ENV !== 'test' && missingClerkConfiguration.length > 0) {
+    throw new Error(`Missing Clerk configuration: ${missingClerkConfiguration.join(', ')}`);
+  }
+
   const app = Fastify({
     logger: config.NODE_ENV !== 'test',
     requestIdHeader: 'x-request-id',
@@ -28,11 +44,14 @@ export function buildApp(
     issuer: rawEnvironment.CLERK_ISSUER,
     audience: rawEnvironment.CLERK_AUDIENCE,
     jwksUrl: rawEnvironment.CLERK_JWKS_URL,
-    authorizedParties: rawEnvironment.CLERK_AUTHORIZED_PARTIES?.split(',')
-      .map((party) => party.trim())
-      .filter(Boolean),
+    authorizedParties,
     jwksFetch: dependencies.auth?.jwksFetch,
+    testMode,
   });
+
+  if (dependencies.pool) {
+    await registerWorkspaceRoutes(app, dependencies.pool);
+  }
 
   app.addHook('onRequest', async (request, reply) => {
     const requestId = getOrCreateRequestId(
@@ -133,7 +152,7 @@ export async function startServer() {
   const pool = process.env.DATABASE_URL
     ? new Pool({ connectionString: process.env.DATABASE_URL })
     : undefined;
-  const app = buildApp(process.env, { pool });
+  const app = await buildApp(process.env, { pool });
   if (pool) app.addHook('onClose', () => pool.end());
   try {
     await app.listen({ host: '0.0.0.0', port: Number(process.env.PORT ?? 3000) });

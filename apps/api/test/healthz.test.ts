@@ -4,7 +4,7 @@ import { buildApp } from '../src/index';
 
 describe('GET /healthz', () => {
   it('returns a healthy payload and preserves correlation ids', async () => {
-    const app = buildApp({ NODE_ENV: 'test' });
+    const app = await buildApp({ NODE_ENV: 'test' });
     const response = await app.inject({
       method: 'GET',
       url: '/healthz',

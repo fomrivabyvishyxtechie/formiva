@@ -4,6 +4,9 @@ All meaningful engineering changes should be summarized here.
 
 ## Unreleased
 
+- Hardened API Clerk configuration: missing configuration now fails startup outside test, and synthetic auth bypass is gated on both `NODE_ENV=test` and explicit `testMode`.
+- Updated workspace authentication to use the typed authenticated identity and added coverage for missing configuration, disabled production test mode, unauthenticated requests, and synthetic workspace requests.
+- Verified Phase 2.3 against disposable local PostgreSQL 16: database tests passed, all 16 API tests passed, and format, lint, typecheck, API build, and `git diff --check` passed. See `docs/evidence/phase-2/phase-2-3-verification.md`.
 - Implemented the Phase 2.2 Fastify auth plugin: Clerk JWT verification, database-backed workspace membership/role checks, selector-only workspace headers, and tenant-scoped transaction callbacks.
 - Fixed repository-wide formatting issues in `packages/db/test/foundation.test.ts`.
 - Added synthetic auth tests covering missing/expired tokens, invalid issuer/audience/authorized party, unknown identity, foreign workspace, insufficient role, and valid membership.

@@ -52,3 +52,12 @@ export function createProblemDetails(input: {
     ...(input.errors && input.errors.length > 0 ? { errors: input.errors } : {}),
   };
 }
+
+export {
+  workspaceCreateRequestSchema,
+  workspaceCreateResponseSchema,
+  memberSchema,
+  workspaceMemberListResponseSchema,
+  memberInviteRequestSchema,
+  memberRoleChangeRequestSchema,
+} from './workspaces.js';

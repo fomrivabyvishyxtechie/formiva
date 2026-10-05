@@ -32,6 +32,7 @@ export interface AuthPluginOptions {
   jwksUrl?: string;
   authorizedParties?: readonly string[];
   jwksFetch?: FetchImplementation;
+  testMode?: boolean;
 }
 
 declare module 'fastify' {
@@ -102,6 +103,10 @@ async function verifyRequest(
   options: AuthPluginOptions,
   jwks: RemoteJWKSet | undefined,
 ): Promise<AuthenticatedIdentity> {
+  if (options.testMode && process.env.NODE_ENV === 'test') {
+    return { subject: 'synthetic-test-user' };
+  }
+
   const token = getToken(request);
   const parties = options.authorizedParties?.filter(Boolean) ?? [];
   if (!options.issuer || !options.audience || parties.length === 0 || !jwks) {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
+import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { exportJWK, generateKeyPair, SignJWT, type FetchImplementation } from 'jose';
 import { runMigrations } from '@formiva/db';
@@ -33,7 +34,7 @@ const firstSubject = `user_synthetic_${randomUUID()}`;
 const secondSubject = `user_synthetic_${randomUUID()}`;
 const unknownSubject = `user_synthetic_${randomUUID()}`;
 
-let app: ReturnType<typeof buildApp>;
+let app: FastifyInstance | undefined;
 let authPool: Pool;
 let privateKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];
 let jwksFetch: FetchImplementation;
@@ -61,6 +62,7 @@ async function requestWithToken(
   workspaceId = firstWorkspaceId,
   urlPath = '/v1/private',
 ) {
+  if (!app) throw new Error('The auth test app has not been initialized.');
   return app.inject({
     method: 'GET',
     url: urlPath,
@@ -141,7 +143,7 @@ describe('Fastify auth and workspace authorization', () => {
         void client.query('SET ROLE formiva_app');
       },
     });
-    app = buildApp(
+    app = await buildApp(
       {
         NODE_ENV: 'test',
         CLERK_ISSUER: issuer,
