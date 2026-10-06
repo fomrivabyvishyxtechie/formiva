@@ -7,10 +7,10 @@ Updated: 2026-10-06
 Continue Phase 2 only. Do not start Phase 3.
 
 - Phase 2.1–2.3 database, authentication, workspace, and auth-configuration work is implemented.
-- Phase 2.4 tenant-isolation suite exists and passes against the current API surface.
-- First tenant-scoped resource operation is implemented: `GET /v1/cases` in `apps/api/src/routes/cases.ts`. It requires a verified Clerk JWT, membership-matched `X-Workspace-Id`, `case.read`, and `request.withTenant()`. SQL also filters on the authorized workspace.
-- Synthetic two-workspace tests cover case list isolation, foreign workspace 404, missing auth 401, insufficient permission 403, invalid pagination, no-context zero rows, app-role RLS, and route coverage inventory.
-- The API does not yet implement case detail/timeline/actions, documents, jobs, workflows, integrations, or audit endpoints. The schema has `ai_results` and billing tables, but API Contract v1.1 defines no standalone result or billing endpoint.
+- Phase 2.4 tenant-isolation suite passes against the current API surface.
+- Tenant-scoped case list, detail, and timeline operations are implemented in `apps/api/src/routes/cases.ts`. Each requires a verified Clerk JWT, membership-matched `X-Workspace-Id`, `case.read`, and `request.withTenant()`; case lookups also filter on the authorized workspace.
+- Synthetic two-workspace tests cover case list/detail/timeline isolation, foreign case 404, missing auth 401, insufficient permission 403, route coverage inventory, no-context zero rows, and app-role RLS.
+- Case rework/cancel, documents, jobs, workflows, integrations, and audit endpoints remain unimplemented. The schema has `ai_results` and billing tables, but API Contract v1.1 defines no standalone result or billing endpoint.
 - Phase 2 is **not complete**. No commit was made.
 
 ## Last verification
@@ -18,15 +18,15 @@ Continue Phase 2 only. Do not start Phase 3.
 All passed with the disposable local PostgreSQL 16 test database:
 
 - `pnpm --filter @formiva/db run test`
-- `pnpm --filter @formiva/api run test` — 5 files, 16 tests
-- `pnpm exec vitest run tests/security/tenant-isolation.test.ts` — 1 file, 4 tests
+- `pnpm --filter @formiva/api run test` — 6 files, 20 tests
+- `pnpm exec vitest run tests/security/tenant-isolation.test.ts` — 1 file, 6 tests
 - `pnpm run format:check`
 - `pnpm run lint`
 - `pnpm run typecheck`
 - `pnpm --filter @formiva/api run build`
 - `git diff --check`
 
-The repository lint/format scripts do not include root-level `tests/security/`; the security test has direct Prettier and strict TypeScript checks.
+The repository lint/format scripts do not include root-level `tests/security/`; the security test was separately Prettier-checked and executed by Vitest.
 
 ## Credentials and environment
 
@@ -34,7 +34,7 @@ Do not put credentials in this note, source control, test fixtures, or logs. The
 
 ## Next task
 
-Implement only `GET /v1/cases/{case_id}` using the approved API contract and existing `cases` schema. Require verified JWT, membership-matched workspace selector, `case.read`, and `request.withTenant()`. Query by both case ID and tenant context; return the contract-safe 404 for absent/foreign cases without revealing existence. Add synthetic two-workspace integration coverage for own case, foreign case 404, no auth 401, and insufficient permission 403. Do not modify applied migrations unless strictly necessary and approved.
+Continue Phase 2 only. Before selecting another operation, check the approved roadmap, API contract, schema, and current routes/tests; implement one explicitly required operation at a time with synthetic two-workspace authorization coverage. Do not implement case rework/cancel, document operations, or Phase 3 as part of this timeline task.
 
 Afterward, rerun the DB tests, API tests, tenant-isolation suite, formatting, lint, typecheck, API build, and `git diff --check`. Update Phase 2 evidence to reflect only implemented, tested endpoints. Continue one resource at a time; do not claim all of Phase 2 complete until required domains have coverage.
 

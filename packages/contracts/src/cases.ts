@@ -32,6 +32,20 @@ export const caseSchema = z.object({
   created_at: z.string().datetime(),
 });
 
+export const caseTimelineParamsSchema = z.object({
+  case_id: z.string().uuid(),
+});
+
+export const caseTimelineResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      occurred_at: z.string().datetime(),
+      correlation_id: z.string().uuid(),
+      event: z.literal('case_activity'),
+    }),
+  ),
+});
+
 export const caseListResponseSchema = z.object({
   items: z.array(caseSchema),
   limit: z.number().int().min(1).max(100),

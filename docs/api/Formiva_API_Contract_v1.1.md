@@ -245,6 +245,22 @@ Reject invalid fields, missing policy, unsupported document classes, published-v
 
 Do not return raw document text, full IDs, credentials, or hidden policy internals.
 
+`GET /v1/cases/{case_id}/timeline` requires a valid JWT, active membership in the selected workspace, and `case.read`. It returns:
+
+```json
+{
+  "items": [
+    {
+      "occurred_at": "2026-10-06T12:00:00.000Z",
+      "correlation_id": "00000000-0000-4000-8000-000000000090",
+      "event": "case_activity"
+    }
+  ]
+}
+```
+
+Only case audit events with a correlation ID are included. Event actions are represented by the fixed `case_activity` label; actor details, reasons, audit payloads, object IDs, hashes, document text, credentials, and policy internals are not returned. Unknown and foreign case IDs return the same 404 response. Missing authentication returns 401; missing `case.read` returns 403.
+
 ## 6.4 Documents
 
 | Method | Path | Purpose |

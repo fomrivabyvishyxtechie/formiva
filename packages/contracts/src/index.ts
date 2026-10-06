@@ -64,6 +64,8 @@ export {
 export {
   caseListQuerySchema,
   caseListResponseSchema,
+  caseTimelineParamsSchema,
+  caseTimelineResponseSchema,
   caseStatusSchema,
   caseSchema,
 } from './cases.js';

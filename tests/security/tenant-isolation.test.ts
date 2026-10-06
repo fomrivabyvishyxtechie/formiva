@@ -85,6 +85,12 @@ const authorizationCoverage: Record<
     authenticatedAccess: 'tested',
     foreignResource: 404,
   },
+  'GET /v1/cases/:case_id/timeline': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
 };
 
 function readProtectedRoutes(routeTree: string): { method: RouteMethod; path: string }[] {
@@ -375,6 +381,51 @@ describe('Phase 2.4 tenant isolation', () => {
       const insufficientPermissionResponse = await app.inject({
         method: 'GET',
         url: `/v1/cases/${caseIds[0]}`,
+        headers,
+      });
+      expect(insufficientPermissionResponse.statusCode).toBe(403);
+    } finally {
+      await adminPool.query(
+        `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
+         VALUES ($1, $2, 'case.read')`,
+        [workspaceIds[0], roleId],
+      );
+    }
+  });
+
+  it('authorizes case timeline access and hides foreign cases with 404', async () => {
+    assert.ok(app);
+    const headers = {
+      authorization: `Bearer ${viewerToken}`,
+      'x-workspace-id': workspaceIds[0],
+    };
+    const ownCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[0]}/timeline`,
+      headers,
+    });
+    expect(ownCaseResponse.statusCode, ownCaseResponse.body).toBe(200);
+    expect(ownCaseResponse.json()).toEqual({ items: [] });
+
+    const foreignCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[1]}/timeline`,
+      headers,
+    });
+    expect(foreignCaseResponse.statusCode).toBe(404);
+
+    const unknownCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${randomUUID()}/timeline`,
+      headers,
+    });
+    expect(unknownCaseResponse.statusCode).toBe(404);
+
+    try {
+      await adminPool.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
+      const insufficientPermissionResponse = await app.inject({
+        method: 'GET',
+        url: `/v1/cases/${caseIds[0]}/timeline`,
         headers,
       });
       expect(insufficientPermissionResponse.statusCode).toBe(403);

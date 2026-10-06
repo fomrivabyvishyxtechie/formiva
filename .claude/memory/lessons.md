@@ -24,3 +24,10 @@ Format:
 - Root cause: A configuration gap and an intentional synthetic-auth test mode are separate states.
 - Fix: Allow the bypass only when the effective environment is `test` and the caller explicitly enables `testMode`; fail startup for missing configuration elsewhere.
 - Prevention: Test auth configuration behavior for both explicit and implicit test-mode requests.
+
+## 2026-10-06 — Project audit data into public timelines
+- Context: Tenant-scoped audit rows can contain internal action names and metadata not suitable for API responses.
+- What happened: The case timeline must remain correlation-linked without exposing audit internals or sensitive values.
+- Root cause: Audit storage fields are broader than the public timeline contract.
+- Fix: Select only event time and correlation ID, and map each row to a fixed public event label.
+- Prevention: Never serialize or spread audit rows/payloads directly into public responses.

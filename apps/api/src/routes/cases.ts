@@ -1,6 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { caseListQuerySchema, caseListResponseSchema, caseSchema } from '@formiva/contracts';
+import {
+  caseListQuerySchema,
+  caseListResponseSchema,
+  caseSchema,
+  caseTimelineParamsSchema,
+  caseTimelineResponseSchema,
+} from '@formiva/contracts';
 
 export async function registerCaseRoutes(app: FastifyInstance) {
   app.get('/v1/cases', async (request, reply) => {
@@ -92,6 +98,67 @@ export async function registerCaseRoutes(app: FastifyInstance) {
       return caseSchema.parse({
         ...row,
         created_at: row.created_at.toISOString(),
+      });
+    });
+
+    if (!response) {
+      return reply.code(404).send({ error: 'Case not found.' });
+    }
+
+    return reply.send(response);
+  });
+
+  app.get('/v1/cases/:case_id/timeline', async (request, reply) => {
+    const withTenant = request.withTenant;
+    if (!withTenant) {
+      return reply.code(401).send({ error: 'Authentication is required.' });
+    }
+
+    const parsedParams = caseTimelineParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      const error = new Error('Case ID is invalid.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'Case ID is invalid.';
+      throw error;
+    }
+
+    const response = await withTenant({ permissions: ['case.read'] }, async (client, context) => {
+      const result = await client.query<{
+        id: string;
+        occurred_at: Date | null;
+        correlation_id: string | null;
+      }>(
+        `SELECT c.id, ae.occurred_at, ae.correlation_id
+           FROM cases c
+           LEFT JOIN audit_events ae
+             ON ae.workspace_id = c.workspace_id
+            AND ae.object_type = 'case'
+            AND ae.object_id = c.id::text
+            AND ae.correlation_id IS NOT NULL
+          WHERE c.id = $1 AND c.workspace_id = $2
+          ORDER BY ae.occurred_at ASC`,
+        [parsedParams.data.case_id, context.workspaceId],
+      );
+
+      if (result.rows.length === 0) {
+        return null;
+      }
+
+      return caseTimelineResponseSchema.parse({
+        items: result.rows.flatMap((row) =>
+          row.occurred_at && row.correlation_id
+            ? [
+                {
+                  occurred_at: row.occurred_at.toISOString(),
+                  correlation_id: row.correlation_id,
+                  event: 'case_activity' as const,
+                },
+              ]
+            : [],
+        ),
       });
     });
 

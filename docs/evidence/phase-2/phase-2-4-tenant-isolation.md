@@ -1,6 +1,6 @@
 # Phase 2.4 Tenant-Isolation Verification Evidence
 
-- Date: 2026-10-05
+- Date: 2026-10-06
 - Scope: currently implemented authenticated API operations and database tenant isolation
 - Database: ephemeral local PostgreSQL 16, `formiva_test` on `127.0.0.1:55432`
 - Fixtures: two synthetic workspaces, one synthetic viewer membership, and tenant-owned form/case rows
@@ -15,8 +15,10 @@ The suite reads the current Fastify route inventory and requires a matching auth
 | --- | --- | --- |
 | `POST /v1/workspaces` | PASS — 401 | Not applicable to this authenticated-creator operation; authorization helper denial is separately verified as 403 |
 | `GET /v1/cases` | PASS — 401 | PASS — 403 without `case.read`; viewer with permission receives only selected-workspace cases |
+| `GET /v1/cases/{case_id}` | PASS — 401 | PASS — 403 without `case.read`; own case is readable and foreign case returns 404 |
+| `GET /v1/cases/{case_id}/timeline` | PASS — 401 | PASS — 403 without `case.read`; own timeline is readable; foreign and unknown case IDs both return 404 |
 
-The case list also returns safe 404 when the authenticated viewer selects the other workspace. The route inventory at verification time contained no other `/v1` operations.
+The case list also returns safe 404 when the authenticated viewer selects the other workspace. Timeline access requires a valid JWT, active selected-workspace membership, and `case.read`. The response returns only timestamp, correlation ID, and a fixed event label; tests confirm audit payload, actor/object IDs, credentials, document text, full synthetic ID numbers, and policy internals are omitted.
 
 ## Foreign identifier coverage
 
@@ -25,7 +27,9 @@ The approved API contract defines the following areas, but the corresponding ope
 | Identifier domain | Current contract operations | Status |
 | --- | --- | --- |
 | Case | `GET /v1/cases` | Implemented and tested: JWT auth, matching workspace membership, `case.read`, pagination/status filter, selected-workspace rows only |
-| Case | `/v1/cases/{case_id}` and case timeline/rework/cancel | Pending — no case-specific operations registered |
+| Case | `GET /v1/cases/{case_id}` | Implemented and tested: JWT, membership, `case.read`, tenant-scoped lookup, foreign-case 404 |
+| Case | `GET /v1/cases/{case_id}/timeline` | Implemented and tested: JWT, membership, `case.read`, correlation-linked redacted projection, foreign-case 404 |
+| Case | Rework/cancel | Pending — not implemented |
 | Document | `/v1/documents/{document_id}` and case documents/view-links/reprocess/quarantine | Pending — no document routes registered |
 | Job | Internal `/v1/ai/jobs` | Pending — no AI job route registered |
 | Result | No result-specific endpoint is defined in API Contract v1.1 | Not applicable to current contract; result data has no registered route |
@@ -45,7 +49,8 @@ Foreign identifiers for these unavailable operations have no live endpoint again
 - Requiring owner for the synthetic viewer membership in workspace A: authorization helper returned 403.
 - Case list issued with workspace A context contains A's synthetic case and not B's; selecting B returns 404.
 - Case list requires `case.read`; removing the permission returns 403, and invalid pagination returns 400.
-- Suite runtime: 1.94 seconds total; test body reported 713 ms.
+- Case timeline lookup filters on the authorized workspace and case, and only selects timestamp/correlation columns from matching audit events.
+- Tenant-isolation suite runtime: 2.33 seconds total; test body reported 1.095 seconds.
 
 ## Commands and results
 
@@ -53,19 +58,18 @@ All commands ran with the disposable local `DATABASE_URL` configured in the shel
 
 | Command | Result |
 | --- | --- |
-| `pnpm exec vitest run tests/security/tenant-isolation.test.ts` | PASS — 1 file, 4 tests |
+| `pnpm exec vitest run tests/security/tenant-isolation.test.ts` | PASS — 1 file, 6 tests |
 | `pnpm --filter @formiva/db run test` | PASS — script reported “Phase 2.1 database tests passed”; it does not emit an assertion count |
-| `pnpm --filter @formiva/api run test` | PASS — 5 files, 16 tests |
+| `pnpm --filter @formiva/api run test` | PASS — 6 files, 20 tests |
 | `pnpm run format:check` | PASS |
 | `pnpm exec prettier --check tests/security/tenant-isolation.test.ts` | PASS |
 | `pnpm run lint` | PASS |
-| Strict NodeNext type check of the root-level security test | PASS |
 | `pnpm run typecheck` | PASS |
 | `pnpm --filter @formiva/api run build` | PASS |
 | `git diff --check` | PASS |
 
-The repository lint and format scripts do not include the root-level `tests/security/` path; the new test was separately Prettier-checked and strict-TypeScript-checked.
+The repository lint and format scripts do not include the root-level `tests/security/` path; the security test was separately Prettier-checked and executed by Vitest. An extra direct ESLint invocation could not lint this file because the configured project service excludes it, and an ad hoc standalone TypeScript invocation reported diagnostics on unchanged portions of the existing security test. The required workspace lint/typecheck commands passed.
 
 ## Status and follow-up
 
-Current registered-route tenant-isolation coverage, including `GET /v1/cases`, is verified. Phase 2.4 is not complete for the full planned API surface: foreign case-detail, document, job, workflow, integration, audit, and future billing/result operations remain pending or not applicable until implemented. Do not treat this evidence as full endpoint-level coverage or as a Phase 2 exit sign-off.
+Current registered-route tenant-isolation coverage, including case list, detail, and timeline, is verified after the checks recorded above. Phase 2.4 is not complete for the full planned API surface: document, job, workflow, integration, audit, and future billing/result operations remain pending or not applicable until implemented. Do not treat this evidence as full endpoint-level coverage or as a Phase 2 exit sign-off.
