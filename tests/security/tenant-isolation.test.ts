@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../apps/api/src/index.js';
+import { createSyntheticClerk } from '../../apps/api/test/support/synthetic-clerk.js';
 import { runMigrations, withAuthorizedTenant, withTenant } from '../../packages/db/src/index.js';
 
 type DbPool = Parameters<typeof withTenant>[0];
@@ -46,17 +47,28 @@ const appPool = new Pool({
 const fixtureId = randomUUID();
 const workspaceIds = [randomUUID(), randomUUID()];
 const templateIds = [randomUUID(), randomUUID()];
+const versionIds = [randomUUID(), randomUUID()];
+const caseIds = [randomUUID(), randomUUID()];
 const userId = randomUUID();
 const authSubject = `synthetic_tenant_isolation_${fixtureId}`;
 const workspaceKeys = [`tenant-isolation-${fixtureId}-a`, `tenant-isolation-${fixtureId}-b`];
-const workspaceRoleId = randomUUID();
+const roleId = randomUUID();
 let fixturesCreated = false;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
+let unauthenticatedApp: Awaited<ReturnType<typeof buildApp>> | undefined;
+let viewerToken: string;
 
-const authorizationCoverage: Record<string, { missingAuth: 401; insufficientRole: string }> = {
+const authorizationCoverage: Record<
+  string,
+  { missingAuth: 401; insufficientRole: 403 | 'not-applicable' }
+> = {
   'POST /v1/workspaces': {
     missingAuth: 401,
-    insufficientRole: 'not applicable: workspace creation is for an authenticated creator',
+    insufficientRole: 'not-applicable',
+  },
+  'GET /v1/cases': {
+    missingAuth: 401,
+    insufficientRole: 403,
   },
 };
 
@@ -96,6 +108,9 @@ describe('Phase 2.4 tenant isolation', () => {
     assert.match(databaseInfo.rows[0].version, /^PostgreSQL 16\./);
     assert.equal(databaseInfo.rows[0].current_database, 'formiva_test');
 
+    const clerk = await createSyntheticClerk();
+    viewerToken = await clerk.createToken(authSubject);
+
     await adminPool.query(
       `INSERT INTO workspaces (id, slug, name)
        VALUES ($1, $3, 'Synthetic tenant isolation A'),
@@ -111,12 +126,17 @@ describe('Phase 2.4 tenant isolation', () => {
     await adminPool.query(
       `INSERT INTO roles (id, workspace_id, name, is_system)
        VALUES ($1, $2, 'viewer', true)`,
-      [workspaceRoleId, workspaceIds[0]],
+      [roleId, workspaceIds[0]],
     );
     await adminPool.query(
       `INSERT INTO workspace_members (workspace_id, user_id, role_id, status, joined_at)
        VALUES ($1, $2, $3, 'active', now())`,
-      [workspaceIds[0], userId, workspaceRoleId],
+      [workspaceIds[0], userId, roleId],
+    );
+    await adminPool.query(
+      `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
+       VALUES ($1, $2, 'case.read')`,
+      [workspaceIds[0], roleId],
     );
     await adminPool.query(
       `INSERT INTO form_templates (id, workspace_id, key, name)
@@ -131,17 +151,53 @@ describe('Phase 2.4 tenant isolation', () => {
         workspaceKeys[1],
       ],
     );
+    await adminPool.query(
+      `INSERT INTO form_template_versions (id, workspace_id, template_id, version_number)
+       VALUES ($1, $3, $5, 1),
+              ($2, $4, $6, 1)`,
+      [
+        versionIds[0],
+        versionIds[1],
+        workspaceIds[0],
+        workspaceIds[1],
+        templateIds[0],
+        templateIds[1],
+      ],
+    );
+    await adminPool.query(
+      `INSERT INTO cases (id, workspace_id, case_number, form_version_id, status)
+       VALUES ($1, $3, 101, $5, 'submitted'),
+              ($2, $4, 202, $6, 'submitted')`,
+      [caseIds[0], caseIds[1], workspaceIds[0], workspaceIds[1], versionIds[0], versionIds[1]],
+    );
 
-    app = await buildApp({ NODE_ENV: 'test' }, { pool: appPool });
+    app = await buildApp(
+      {
+        NODE_ENV: 'test',
+        CLERK_ISSUER: clerk.issuer,
+        CLERK_AUDIENCE: clerk.audience,
+        CLERK_JWKS_URL: 'https://tenant-isolation.synthetic.invalid/.well-known/jwks.json',
+        CLERK_AUTHORIZED_PARTIES: clerk.authorizedParty,
+      },
+      { pool: appPool, auth: { jwksFetch: clerk.jwksFetch } },
+    );
     await app.ready();
+    unauthenticatedApp = await buildApp({ NODE_ENV: 'test' }, { pool: appPool });
+    await unauthenticatedApp.ready();
   }, 60_000);
 
   afterAll(async () => {
     if (app) await app.close();
+    if (unauthenticatedApp) await unauthenticatedApp.close();
     if (fixturesCreated) {
+      await adminPool.query('DELETE FROM cases WHERE id = ANY($1::uuid[])', [caseIds]);
+      await adminPool.query('DELETE FROM form_template_versions WHERE id = ANY($1::uuid[])', [
+        versionIds,
+      ]);
       await adminPool.query('DELETE FROM workspace_members WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
+      await adminPool.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
       await adminPool.query('DELETE FROM roles WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
@@ -158,13 +214,14 @@ describe('Phase 2.4 tenant isolation', () => {
   it('requires explicit authorization coverage for every registered protected route', async () => {
     assert.ok(app);
     const routes = readProtectedRoutes(app.printRoutes({ commonPrefix: false }));
-    const discoveredCoverage = routes.map(routeCoverageKey).sort();
+    const discoveredCoverage = [...new Set(routes.map(routeCoverageKey))].sort();
     expect(discoveredCoverage).toEqual(Object.keys(authorizationCoverage).sort());
 
     for (const route of routes) {
       const coverage = authorizationCoverage[routeCoverageKey(route)];
       assert.ok(coverage, `Missing authorization coverage for ${routeCoverageKey(route)}`);
-      const response = await app.inject({
+      assert.ok(unauthenticatedApp);
+      const response = await unauthenticatedApp.inject({
         method: route.method,
         url: injectPath(route.path),
       });
@@ -207,5 +264,63 @@ describe('Phase 2.4 tenant isolation', () => {
         async () => undefined,
       ),
     ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('lists only the selected workspace cases using the authenticated membership and case.read permission', async () => {
+    assert.ok(app);
+    const ownWorkspaceResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/cases?status=submitted&limit=10',
+      headers: {
+        authorization: `Bearer ${viewerToken}`,
+        'x-workspace-id': workspaceIds[0],
+      },
+    });
+    expect(ownWorkspaceResponse.statusCode, ownWorkspaceResponse.body).toBe(200);
+    expect(ownWorkspaceResponse.json()).toMatchObject({
+      limit: 10,
+      offset: 0,
+      items: [{ id: caseIds[0], case_number: '101', status: 'submitted' }],
+    });
+    expect(ownWorkspaceResponse.body).not.toContain(caseIds[1]);
+
+    const foreignWorkspaceResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/cases',
+      headers: {
+        authorization: `Bearer ${viewerToken}`,
+        'x-workspace-id': workspaceIds[1],
+      },
+    });
+    expect(foreignWorkspaceResponse.statusCode).toBe(404);
+
+    const invalidQueryResponse = await app.inject({
+      method: 'GET',
+      url: '/v1/cases?limit=101',
+      headers: {
+        authorization: `Bearer ${viewerToken}`,
+        'x-workspace-id': workspaceIds[0],
+      },
+    });
+    expect(invalidQueryResponse.statusCode).toBe(400);
+
+    try {
+      await adminPool.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
+      const insufficientRoleResponse = await app.inject({
+        method: 'GET',
+        url: '/v1/cases',
+        headers: {
+          authorization: `Bearer ${viewerToken}`,
+          'x-workspace-id': workspaceIds[0],
+        },
+      });
+      expect(insufficientRoleResponse.statusCode).toBe(403);
+    } finally {
+      await adminPool.query(
+        `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
+         VALUES ($1, $2, 'case.read')`,
+        [workspaceIds[0], roleId],
+      );
+    }
   });
 });

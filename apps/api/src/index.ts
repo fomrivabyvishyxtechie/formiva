@@ -10,6 +10,7 @@ import {
   safeSerializeError,
 } from '@formiva/observability';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
+import { registerCaseRoutes } from './routes/cases.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 
 export async function buildApp(
@@ -51,6 +52,7 @@ export async function buildApp(
 
   if (dependencies.pool) {
     await registerWorkspaceRoutes(app, dependencies.pool);
+    await registerCaseRoutes(app);
   }
 
   app.addHook('onRequest', async (request, reply) => {
