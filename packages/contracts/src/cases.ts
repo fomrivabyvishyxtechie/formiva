@@ -46,6 +46,37 @@ export const caseTimelineResponseSchema = z.object({
   ),
 });
 
+export const caseDocumentsParamsSchema = z.object({
+  case_id: z.string().uuid(),
+});
+
+export const caseDocumentSchema = z.object({
+  id: z.string().uuid(),
+  doc_class: z.enum([
+    'identity',
+    'address',
+    'education',
+    'employment',
+    'bank',
+    'tax',
+    'photo',
+    'other',
+    'unknown',
+  ]),
+  status: z.enum(['pending_upload', 'uploaded', 'scanning', 'clean', 'quarantined', 'rejected']),
+  scan_state: z.enum(['not_scanned', 'clean', 'infected', 'suspicious', 'rejected', 'error']),
+  hash_state: z.enum(['available', 'unavailable']),
+  retention_state: z.enum(['held', 'scheduled', 'expired', 'unspecified']),
+  retain_until: z.string().datetime().nullable(),
+  scanned_at: z.string().datetime().nullable(),
+  created_at: z.string().datetime(),
+  updated_at: z.string().datetime(),
+});
+
+export const caseDocumentsResponseSchema = z.object({
+  items: z.array(caseDocumentSchema),
+});
+
 export const caseReworkParamsSchema = z.object({
   case_id: z.string().uuid(),
 });

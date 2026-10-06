@@ -8,6 +8,8 @@ import {
   caseCancelParamsSchema,
   caseCancelRequestSchema,
   caseCancelResponseSchema,
+  caseDocumentsParamsSchema,
+  caseDocumentsResponseSchema,
   caseReworkIdempotencyKeySchema,
   caseReworkParamsSchema,
   caseReworkRequestSchema,
@@ -170,6 +172,108 @@ export async function registerCaseRoutes(app: FastifyInstance) {
         ),
       });
     });
+
+    if (!response) {
+      return reply.code(404).send({ error: 'Case not found.' });
+    }
+
+    return reply.send(response);
+  });
+
+  app.get('/v1/cases/:case_id/documents', async (request, reply) => {
+    const withTenant = request.withTenant;
+    if (!withTenant) {
+      return reply.code(401).send({ error: 'Authentication is required.' });
+    }
+
+    const parsedParams = caseDocumentsParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      const error = new Error('Case ID is invalid.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'Case ID is invalid.';
+      throw error;
+    }
+
+    const response = await withTenant(
+      { permissions: ['document.read_sensitive'] },
+      async (client, context) => {
+        const result = await client.query<{
+          case_id: string;
+          document_id: string | null;
+          doc_class: string | null;
+          status: string | null;
+          scan_state: string | null;
+          hash_state: string | null;
+          retention_state: string | null;
+          retain_until: Date | null;
+          scanned_at: Date | null;
+          created_at: Date | null;
+          updated_at: Date | null;
+        }>(
+          `SELECT c.id AS case_id,
+                  d.id AS document_id,
+                  d.doc_class,
+                  d.status,
+                  coalesce(scan.result, 'not_scanned') AS scan_state,
+                  CASE WHEN d.sha256 IS NULL THEN 'unavailable' ELSE 'available' END AS hash_state,
+                  CASE
+                    WHEN d.legal_hold THEN 'held'
+                    WHEN d.retain_until IS NULL THEN 'unspecified'
+                    WHEN d.retain_until <= now() THEN 'expired'
+                    ELSE 'scheduled'
+                  END AS retention_state,
+                  d.retain_until,
+                  scan.scanned_at,
+                  d.created_at,
+                  d.updated_at
+             FROM cases c
+             LEFT JOIN case_documents d
+               ON d.case_id = c.id
+              AND d.workspace_id = c.workspace_id
+              AND d.deleted_at IS NULL
+             LEFT JOIN LATERAL (
+               SELECT ds.result, ds.scanned_at
+                 FROM document_scans ds
+                WHERE ds.document_id = d.id
+                  AND ds.workspace_id = d.workspace_id
+                ORDER BY ds.scanned_at DESC, ds.id DESC
+                LIMIT 1
+             ) scan ON true
+            WHERE c.id = $1
+              AND c.workspace_id = $2
+            ORDER BY d.created_at ASC, d.id ASC`,
+          [parsedParams.data.case_id, context.workspaceId],
+        );
+
+        if (result.rows.length === 0) {
+          return null;
+        }
+
+        return caseDocumentsResponseSchema.parse({
+          items: result.rows.flatMap((row) =>
+            row.document_id
+              ? [
+                  {
+                    id: row.document_id,
+                    doc_class: row.doc_class,
+                    status: row.status,
+                    scan_state: row.scan_state,
+                    hash_state: row.hash_state,
+                    retention_state: row.retention_state,
+                    retain_until: row.retain_until?.toISOString() ?? null,
+                    scanned_at: row.scanned_at?.toISOString() ?? null,
+                    created_at: row.created_at?.toISOString(),
+                    updated_at: row.updated_at?.toISOString(),
+                  },
+                ]
+              : [],
+          ),
+        });
+      },
+    );
 
     if (!response) {
       return reply.code(404).send({ error: 'Case not found.' });

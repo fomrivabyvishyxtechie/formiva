@@ -70,12 +70,19 @@ const appPool = new Pool({
     };
     client.query = queryWithSavepoints as DbClient['query'];
   },
+  'GET /v1/cases/:case_id/documents': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
 });
 
 const fixtureId = randomUUID();
 const workspaceIds = [randomUUID(), randomUUID()];
 const templateIds = [randomUUID(), randomUUID()];
 const versionIds = [randomUUID(), randomUUID()];
+const documentIds = [randomUUID(), randomUUID()];
 const caseIds = [
   randomUUID(),
   randomUUID(),
@@ -119,6 +126,12 @@ const authorizationCoverage: Record<
     foreignResource: 'not-applicable',
   },
   'GET /v1/cases/:case_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'GET /v1/cases/:case_id/documents': {
     missingAuth: 401,
     insufficientRole: 403,
     authenticatedAccess: 'tested',
@@ -230,7 +243,8 @@ describe('Phase 2.4 tenant isolation', () => {
       `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
        VALUES ($1, $2, 'case.read'),
               ($1, $3, 'case.read'),
-              ($1, $3, 'case.approve')`,
+       ($1, $3, 'case.approve'),
+       ($1, $3, 'document.read_sensitive')`,
       [workspaceIds[0], roleId, approverRoleId],
     );
     await adminPool.query(
@@ -280,6 +294,43 @@ describe('Phase 2.4 tenant isolation', () => {
         caseIds[5],
       ],
     );
+    await adminPool.query(
+      `INSERT INTO case_documents (
+         id, workspace_id, case_id, bucket, object_key, original_filename,
+         mime_type, size_bytes, sha256, doc_class, status, retain_until
+       )
+       VALUES (
+         $1, $3, $5, 'synthetic-bucket',
+         'ws/workspace-secret/cases/' || $7 || '/object-key-secret',
+         'Synthetic ID 123456789012.pdf', 'application/pdf', 128,
+         decode(repeat('ab', 32), 'hex'), 'identity', 'clean', now() + interval '30 days'
+       ), (
+         $2, $4, $6, 'foreign-secret-bucket',
+         'ws/foreign-workspace/' || $8 || '/object-key', 'foreign.pdf',
+         'application/pdf', 256, decode(repeat('cd', 32), 'hex'),
+         'address', 'uploaded', null
+       )`,
+      [
+        documentIds[0],
+        documentIds[1],
+        workspaceIds[0],
+        workspaceIds[1],
+        caseIds[0],
+        caseIds[1],
+        fixtureId,
+        fixtureId,
+      ],
+    );
+    await withTenant(appPool, workspaceIds[0], approverUserId, async (client) =>
+      client.query(
+        `INSERT INTO document_scans (workspace_id, document_id, scanner, scanner_version, result, details)
+         VALUES (
+           $1, $2, 'clamav', 'synthetic-1', 'clean',
+           '{"ocr_text":"Synthetic raw OCR 123456789012","credential":"object-store-secret"}'
+         )`,
+        [workspaceIds[0], documentIds[0]],
+      ),
+    );
 
     app = await buildApp(
       {
@@ -304,6 +355,7 @@ describe('Phase 2.4 tenant isolation', () => {
     if (rawQuery) await rawQuery('ROLLBACK');
     transactionClient.release();
     if (fixturesCreated) {
+      await adminPool.query('DELETE FROM case_documents WHERE id = ANY($1::uuid[])', [documentIds]);
       await adminPool.query('DELETE FROM cases WHERE id = ANY($1::uuid[])', [caseIds]);
       await adminPool.query('DELETE FROM form_template_versions WHERE id = ANY($1::uuid[])', [
         versionIds,
@@ -523,6 +575,79 @@ describe('Phase 2.4 tenant isolation', () => {
         [workspaceIds[0], roleId],
       );
     }
+  });
+
+  it('returns only authorized safe document metadata and isolates case document lists', async () => {
+    assert.ok(app);
+    assert.ok(unauthenticatedApp);
+    const headers = {
+      authorization: `Bearer ${approverToken}`,
+      'x-workspace-id': workspaceIds[0],
+    };
+
+    const documentsResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[0]}/documents`,
+      headers,
+    });
+    expect(documentsResponse.statusCode, documentsResponse.body).toBe(200);
+    const documents = documentsResponse.json();
+    expect(documents.items).toHaveLength(1);
+    expect(documents.items[0]).toMatchObject({
+      id: documentIds[0],
+      doc_class: 'identity',
+      status: 'clean',
+      scan_state: 'clean',
+      hash_state: 'available',
+      retention_state: 'scheduled',
+    });
+    expect(documentsResponse.body).not.toContain(documentIds[1]);
+    for (const secret of [
+      'Synthetic ID 123456789012.pdf',
+      '123456789012',
+      'synthetic-bucket',
+      'object-key-secret',
+      'foreign-workspace',
+      'Synthetic raw OCR',
+      'object-store-secret',
+    ]) {
+      expect(documentsResponse.body).not.toContain(secret);
+    }
+
+    const emptyListResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[2]}/documents`,
+      headers,
+    });
+    expect(emptyListResponse.statusCode).toBe(200);
+    expect(emptyListResponse.json()).toEqual({ items: [] });
+
+    const foreignCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[1]}/documents`,
+      headers,
+    });
+    expect(foreignCaseResponse.statusCode).toBe(404);
+
+    const unknownCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${randomUUID()}/documents`,
+      headers,
+    });
+    expect(unknownCaseResponse.statusCode).toBe(404);
+
+    const insufficientPermissionResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[0]}/documents`,
+      headers: { ...headers, authorization: `Bearer ${viewerToken}` },
+    });
+    expect(insufficientPermissionResponse.statusCode).toBe(403);
+
+    const missingAuthResponse = await unauthenticatedApp.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[0]}/documents`,
+    });
+    expect(missingAuthResponse.statusCode).toBe(401);
   });
 
   it('authorizes rework requests and returns safe errors for foreign, unknown, and invalid-state cases', async () => {

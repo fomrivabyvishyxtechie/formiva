@@ -295,6 +295,12 @@ Only case audit events with a correlation ID are included. Event actions are rep
 
 ## 6.4 Documents
 
+### List documents for a case
+
+`GET /v1/cases/{case_id}/documents` requires a valid JWT, active membership in the selected workspace, and `document.read_sensitive`. It returns `{ "items": [...] }` containing only the document ID, document class, processing status, latest scan result/time, whether a SHA-256 hash is available, retention state/deadline, and creation/update timestamps. An active legal hold is represented only as the `held` retention state.
+
+The response does not include filenames, MIME types, hash values, bucket names, object keys, quarantine reasons, scan details/OCR, extracted values, or policy internals. Documents marked deleted are omitted. An existing case with no visible documents returns an empty list. Unknown and foreign case IDs both return 404; missing authentication returns 401 and missing `document.read_sensitive` returns 403. This operation does not create view links.
+
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/v1/cases/{case_id}/documents` | Safe metadata, scan/hash/retention state. |
