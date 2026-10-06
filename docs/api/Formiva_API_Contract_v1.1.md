@@ -263,6 +263,20 @@ Successful requests return HTTP 200:
 
 The reason and idempotency key are never returned. Repeating the same workspace-scoped key, case, and reason returns the original safe result without a second state change or audit event. Reusing the key for a different case or reason returns 409; a new request from a state without a legal transition also returns 409. Missing/invalid reason or key returns 400; missing authentication returns 401; missing permission returns 403; unknown and foreign cases both return 404. No migration is required: idempotency fingerprints are stored in the existing append-only audit event payload.
 
+### Cancel a case
+
+`POST /v1/cases/{case_id}/cancel` requires a valid JWT, active membership in the selected workspace, and the existing `case.approve` permission. It accepts the same required safe `reason` body and `Idempotency-Key` header as rework. The reason is trimmed, must be 3–500 printable characters, and must not contain a full numeric ID or PAN-shaped value.
+
+Cancellation is allowed only when `app.state_transitions` defines a transition from the current status to `cancelled`. The API locks the tenant-scoped case row, updates its status, and appends the immutable `case.cancelled` audit event in the same tenant transaction. The event contains the reason, from/to statuses, correlation ID, and SHA-256 fingerprint of the idempotency key. A failure rolls back both the state change and audit event.
+
+Successful requests return HTTP 200 with only the case ID, resulting status, and correlation ID:
+
+```json
+{"case_id":"00000000-0000-4000-8000-000000000032","status":"cancelled","correlation_id":"00000000-0000-4000-8000-000000000090"}
+```
+
+Repeating the same workspace-scoped key, case, and reason returns the original safe result without a duplicate transition or audit event. Reusing the key for a different case or reason, or attempting cancellation from a state without a legal transition, returns 409. Invalid reason or key returns 400; missing authentication returns 401; missing `case.approve` returns 403; unknown and foreign case IDs both return 404. The response never includes the reason or audit payload. No migration is required.
+
 `GET /v1/cases/{case_id}/timeline` requires a valid JWT, active membership in the selected workspace, and `case.read`. It returns:
 
 ```json

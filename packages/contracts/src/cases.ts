@@ -50,25 +50,41 @@ export const caseReworkParamsSchema = z.object({
   case_id: z.string().uuid(),
 });
 
+const caseActionReasonSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(500)
+  .refine(
+    (reason) =>
+      ![...reason].some((character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint !== undefined && (codePoint < 32 || codePoint === 127);
+      }),
+  )
+  .refine((reason) => !/\b\d{8,}\b|\b\d{4}(?:[ -]\d{4})+\b|\b[A-Z]{5}\d{4}[A-Z]\b/i.test(reason));
+
 export const caseReworkRequestSchema = z
   .object({
-    reason: z
-      .string()
-      .trim()
-      .min(3)
-      .max(500)
-      .refine(
-        (reason) =>
-          ![...reason].some((character) => {
-            const codePoint = character.codePointAt(0);
-            return codePoint !== undefined && (codePoint < 32 || codePoint === 127);
-          }),
-      )
-      .refine(
-        (reason) => !/\b\d{8,}\b|\b\d{4}(?:[ -]\d{4})+\b|\b[A-Z]{5}\d{4}[A-Z]\b/i.test(reason),
-      ),
+    reason: caseActionReasonSchema,
   })
   .strict();
+
+export const caseCancelParamsSchema = z.object({
+  case_id: z.string().uuid(),
+});
+
+export const caseCancelRequestSchema = z
+  .object({
+    reason: caseActionReasonSchema,
+  })
+  .strict();
+
+export const caseCancelResponseSchema = z.object({
+  case_id: z.string().uuid(),
+  status: z.literal('cancelled'),
+  correlation_id: z.string().uuid(),
+});
 
 export const caseReworkResponseSchema = z.object({
   case_id: z.string().uuid(),

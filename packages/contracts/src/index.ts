@@ -70,6 +70,9 @@ export {
   caseReworkRequestSchema,
   caseReworkResponseSchema,
   caseReworkIdempotencyKeySchema,
+  caseCancelParamsSchema,
+  caseCancelRequestSchema,
+  caseCancelResponseSchema,
   caseStatusSchema,
   caseSchema,
 } from './cases.js';

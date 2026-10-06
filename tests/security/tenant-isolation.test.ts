@@ -76,7 +76,14 @@ const fixtureId = randomUUID();
 const workspaceIds = [randomUUID(), randomUUID()];
 const templateIds = [randomUUID(), randomUUID()];
 const versionIds = [randomUUID(), randomUUID()];
-const caseIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+const caseIds = [
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+  randomUUID(),
+];
 const userId = randomUUID();
 const approverUserId = randomUUID();
 const authSubject = `synthetic_tenant_isolation_${fixtureId}`;
@@ -124,6 +131,12 @@ const authorizationCoverage: Record<
     foreignResource: 404,
   },
   'POST /v1/cases/:case_id/rework': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/cases/:case_id/cancel': {
     missingAuth: 401,
     insufficientRole: 403,
     authenticatedAccess: 'tested',
@@ -251,7 +264,9 @@ describe('Phase 2.4 tenant isolation', () => {
        VALUES ($1, $3, 101, $5, 'submitted'),
               ($2, $4, 202, $6, 'submitted'),
               ($7, $3, 103, $5, 'draft'),
-              ($8, $3, 104, $5, 'approval_pending')`,
+              ($8, $3, 104, $5, 'approval_pending'),
+              ($9, $3, 105, $5, 'ai_processing'),
+              ($10, $3, 106, $5, 'review_in_progress')`,
       [
         caseIds[0],
         caseIds[1],
@@ -261,6 +276,8 @@ describe('Phase 2.4 tenant isolation', () => {
         versionIds[1],
         caseIds[2],
         caseIds[3],
+        caseIds[4],
+        caseIds[5],
       ],
     );
 
@@ -679,6 +696,171 @@ describe('Phase 2.4 tenant isolation', () => {
         correlation_id: reworkCorrelationId,
         from_status: 'approval_pending',
         to_status: 'review_queued',
+        key_hash: createHash('sha256').update(idempotencyKey).digest('hex'),
+      },
+    ]);
+  });
+
+  it('cancels only authorized tenant cases and atomically records one idempotent audit event', async () => {
+    assert.ok(app);
+    assert.ok(unauthenticatedApp);
+    const caseId = caseIds[4];
+    const cancellationReason = 'Synthetic applicant withdrew the request.';
+    const idempotencyKey = `tenant-isolation-cancel-${fixtureId}`;
+    const correlationId = randomUUID();
+    const headers = {
+      authorization: `Bearer ${approverToken}`,
+      'x-workspace-id': workspaceIds[0],
+      'x-correlation-id': correlationId,
+      'idempotency-key': idempotencyKey,
+    };
+    const body = { reason: cancellationReason };
+
+    const missingAuthResponse = await unauthenticatedApp.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      payload: body,
+    });
+    expect(missingAuthResponse.statusCode).toBe(401);
+
+    const foreignCaseResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[1]}/cancel`,
+      headers,
+      payload: body,
+    });
+    expect(foreignCaseResponse.statusCode).toBe(404);
+
+    const unknownCaseResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${randomUUID()}/cancel`,
+      headers,
+      payload: body,
+    });
+    expect(unknownCaseResponse.statusCode).toBe(404);
+
+    const insufficientPermissionResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers: { ...headers, authorization: `Bearer ${viewerToken}` },
+      payload: body,
+    });
+    expect(insufficientPermissionResponse.statusCode).toBe(403);
+
+    const missingReasonResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers,
+      payload: {},
+    });
+    expect(missingReasonResponse.statusCode).toBe(400);
+
+    const unsafeReasonResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers,
+      payload: { reason: 'Cancel after ID 123456789012 was reviewed.' },
+    });
+    expect(unsafeReasonResponse.statusCode).toBe(400);
+
+    const missingIdempotencyKeyResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers: {
+        authorization: headers.authorization,
+        'x-workspace-id': headers['x-workspace-id'],
+      },
+      payload: body,
+    });
+    expect(missingIdempotencyKeyResponse.statusCode).toBe(400);
+
+    const illegalStateResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[5]}/cancel`,
+      headers,
+      payload: body,
+    });
+    expect(illegalStateResponse.statusCode).toBe(409);
+    expect(illegalStateResponse.json().detail).not.toContain('review_in_progress');
+
+    const cancellationResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers,
+      payload: body,
+    });
+    expect(cancellationResponse.statusCode, cancellationResponse.body).toBe(200);
+    expect(cancellationResponse.json()).toEqual({
+      case_id: caseId,
+      status: 'cancelled',
+      correlation_id: correlationId,
+    });
+    expect(cancellationResponse.body).not.toContain(cancellationReason);
+    expect(cancellationResponse.body).not.toContain(idempotencyKey);
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers: { ...headers, 'x-correlation-id': randomUUID() },
+      payload: body,
+    });
+    expect(retryResponse.statusCode).toBe(200);
+    expect(retryResponse.json()).toEqual(cancellationResponse.json());
+
+    const changedBodyResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseId}/cancel`,
+      headers,
+      payload: { reason: 'A different synthetic cancellation reason.' },
+    });
+    expect(changedBodyResponse.statusCode).toBe(409);
+
+    const persistedCancellation = await withTenant(
+      appPool,
+      workspaceIds[0],
+      approverUserId,
+      async (client) =>
+        client.query<{
+          status: string;
+          event_count: number;
+          action: string | null;
+          reason: string | null;
+          actor_id: string | null;
+          correlation_id: string | null;
+          from_status: string | null;
+          to_status: string | null;
+          key_hash: string | null;
+        }>(
+          `SELECT c.status,
+                  count(ae.id)::int AS event_count,
+                  min(ae.action) AS action,
+                  min(ae.reason) AS reason,
+                  min(ae.actor_id) AS actor_id,
+                  min(ae.correlation_id::text) AS correlation_id,
+                  min(ae.payload->>'from_status') AS from_status,
+                  min(ae.payload->>'to_status') AS to_status,
+                  min(ae.payload->>'idempotency_key_hash') AS key_hash
+             FROM cases c
+             LEFT JOIN audit_events ae
+               ON ae.workspace_id = c.workspace_id
+              AND ae.object_type = 'case'
+              AND ae.object_id = c.id::text
+              AND ae.action = 'case.cancelled'
+            WHERE c.id = $1 AND c.workspace_id = $2
+            GROUP BY c.status`,
+          [caseId, workspaceIds[0]],
+        ),
+    );
+    expect(persistedCancellation.rows).toEqual([
+      {
+        status: 'cancelled',
+        event_count: 1,
+        action: 'case.cancelled',
+        reason: cancellationReason,
+        actor_id: approverUserId,
+        correlation_id: correlationId,
+        from_status: 'ai_processing',
+        to_status: 'cancelled',
         key_hash: createHash('sha256').update(idempotencyKey).digest('hex'),
       },
     ]);

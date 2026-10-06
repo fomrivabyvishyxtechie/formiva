@@ -4,6 +4,7 @@ All meaningful engineering changes should be summarized here.
 
 ## Unreleased
 
+- Implemented `POST /v1/cases/{case_id}/cancel` with `case.approve`, legal tenant-scoped status transitions, atomic immutable audit recording, and audit-backed idempotency; added synthetic authorization and PostgreSQL tenant-isolation coverage.
 - Implemented `POST /v1/cases/{case_id}/rework` with `case.approve`, a legal tenant-scoped transition to `review_queued`, atomic audit recording, and audit-backed idempotency; added synthetic auth/state/replay coverage and updated Phase 2 evidence.
 - Implemented tenant-scoped `GET /v1/cases/{case_id}/timeline` with JWT, workspace membership, `case.read`, correlation-linked redacted output, and two-workspace authorization coverage; see the updated Phase 2.4 evidence and 2026-10-06 case-timeline update.
 - Implemented the first Phase 2 tenant-scoped resource read: `GET /v1/cases`, protected by JWT, workspace membership, `case.read`, tenant context, and RLS; added two-workspace integration coverage. Remaining resource domains are tracked in the Phase 2.4 evidence and 2026-10-05 engineering update.

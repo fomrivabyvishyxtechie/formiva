@@ -5,6 +5,9 @@ import { getOrCreateCorrelationId } from '@formiva/observability';
 import {
   caseListQuerySchema,
   caseListResponseSchema,
+  caseCancelParamsSchema,
+  caseCancelRequestSchema,
+  caseCancelResponseSchema,
   caseReworkIdempotencyKeySchema,
   caseReworkParamsSchema,
   caseReworkRequestSchema,
@@ -352,6 +355,189 @@ export async function registerCaseRoutes(app: FastifyInstance) {
       };
       error.statusCode = 409;
       error.publicMessage = 'Case cannot be moved to rework with this request.';
+      throw error;
+    }
+
+    return reply.code(200).send(response.value);
+  });
+
+  app.post('/v1/cases/:case_id/cancel', async (request, reply) => {
+    const withTenant = request.withTenant;
+    if (!withTenant) {
+      return reply.code(401).send({ error: 'Authentication is required.' });
+    }
+
+    const parsedParams = caseCancelParamsSchema.safeParse(request.params);
+    if (!parsedParams.success) {
+      const error = new Error('Case ID is invalid.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'Case ID is invalid.';
+      throw error;
+    }
+
+    const parsedBody = caseCancelRequestSchema.safeParse(request.body);
+    if (!parsedBody.success) {
+      const error = new Error('A safe cancellation reason is required.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'A safe cancellation reason is required.';
+      throw error;
+    }
+
+    const parsedIdempotencyKey = caseReworkIdempotencyKeySchema.safeParse(
+      request.headers['idempotency-key'],
+    );
+    if (!parsedIdempotencyKey.success) {
+      const error = new Error('A valid Idempotency-Key is required.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'A valid Idempotency-Key is required.';
+      throw error;
+    }
+
+    const correlationId = getOrCreateCorrelationId(
+      request.headers as Record<string, string | string[] | undefined>,
+    );
+    if (!z.string().uuid().safeParse(correlationId).success) {
+      const error = new Error('X-Correlation-Id must be a UUID.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 400;
+      error.publicMessage = 'X-Correlation-Id must be a UUID.';
+      throw error;
+    }
+
+    const keyHash = createHash('sha256').update(parsedIdempotencyKey.data).digest('hex');
+    const response = await withTenant(
+      { permissions: ['case.approve'] },
+      async (client, context) => {
+        const caseResult = await client.query<{ status: string }>(
+          `SELECT status
+             FROM cases
+            WHERE id = $1 AND workspace_id = $2
+            FOR UPDATE`,
+          [parsedParams.data.case_id, context.workspaceId],
+        );
+        const currentCase = caseResult.rows[0];
+        if (!currentCase) {
+          return { kind: 'not-found' as const };
+        }
+
+        await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 42))`, [
+          `${context.workspaceId}:${keyHash}`,
+        ]);
+
+        const priorResult = await client.query<{
+          object_id: string | null;
+          reason: string | null;
+          correlation_id: string | null;
+        }>(
+          `SELECT object_id, reason, correlation_id
+             FROM audit_events
+            WHERE workspace_id = $1
+              AND object_type = 'case'
+              AND action = 'case.cancelled'
+              AND payload->>'idempotency_key_hash' = $2
+            LIMIT 1`,
+          [context.workspaceId, keyHash],
+        );
+        const priorEvent = priorResult.rows[0];
+        if (priorEvent) {
+          if (
+            priorEvent.object_id !== parsedParams.data.case_id ||
+            priorEvent.reason !== parsedBody.data.reason ||
+            !priorEvent.correlation_id
+          ) {
+            return { kind: 'conflict' as const };
+          }
+          return {
+            kind: 'success' as const,
+            value: caseCancelResponseSchema.parse({
+              case_id: parsedParams.data.case_id,
+              status: 'cancelled',
+              correlation_id: priorEvent.correlation_id,
+            }),
+          };
+        }
+
+        const transitionResult = await client.query<{ allowed: boolean }>(
+          `SELECT EXISTS (
+             SELECT 1
+               FROM app.state_transitions
+              WHERE entity = 'case'
+                AND from_status = $1
+                AND to_status = 'cancelled'
+           ) AS allowed`,
+          [currentCase.status],
+        );
+        if (!transitionResult.rows[0]?.allowed) {
+          return { kind: 'conflict' as const };
+        }
+
+        const updateResult = await client.query<{ status: string }>(
+          `UPDATE cases
+              SET status = 'cancelled'
+            WHERE id = $1 AND workspace_id = $2
+            RETURNING status`,
+          [parsedParams.data.case_id, context.workspaceId],
+        );
+        if (!updateResult.rows[0]) {
+          return { kind: 'not-found' as const };
+        }
+
+        await client.query(
+          `SELECT app.audit(
+             'case.cancelled',
+             'case',
+             $1,
+             $2,
+             $3::jsonb,
+             'user',
+             $4,
+             $5
+           )`,
+          [
+            parsedParams.data.case_id,
+            parsedBody.data.reason,
+            JSON.stringify({
+              from_status: currentCase.status,
+              to_status: 'cancelled',
+              idempotency_key_hash: keyHash,
+            }),
+            context.userId,
+            correlationId,
+          ],
+        );
+
+        return {
+          kind: 'success' as const,
+          value: caseCancelResponseSchema.parse({
+            case_id: parsedParams.data.case_id,
+            status: 'cancelled',
+            correlation_id: correlationId,
+          }),
+        };
+      },
+    );
+
+    if (response.kind === 'not-found') {
+      return reply.code(404).send({ error: 'Case not found.' });
+    }
+    if (response.kind === 'conflict') {
+      const error = new Error('Case cannot be cancelled with this request.') as Error & {
+        statusCode: number;
+        publicMessage: string;
+      };
+      error.statusCode = 409;
+      error.publicMessage = 'Case cannot be cancelled with this request.';
       throw error;
     }
 
