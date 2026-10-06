@@ -60,24 +60,49 @@ let viewerToken: string;
 
 const authorizationCoverage: Record<
   string,
-  { missingAuth: 401; insufficientRole: 403 | 'not-applicable' }
+  {
+    missingAuth: 401;
+    insufficientRole: 403 | 'not-applicable';
+    authenticatedAccess: 'tested' | 'not-applicable';
+    foreignResource: 404 | 'not-applicable';
+  }
 > = {
   'POST /v1/workspaces': {
     missingAuth: 401,
     insufficientRole: 'not-applicable',
+    authenticatedAccess: 'not-applicable',
+    foreignResource: 'not-applicable',
   },
   'GET /v1/cases': {
     missingAuth: 401,
     insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 'not-applicable',
+  },
+  'GET /v1/cases/:case_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
   },
 };
 
 function readProtectedRoutes(routeTree: string): { method: RouteMethod; path: string }[] {
+  const ancestors: string[] = [];
   return routeTree.split('\n').flatMap((line) => {
-    const match = line.match(/^\s*[├└]── (.+?) \(([^)]+)\)$/);
-    const routePath = match?.[1];
-    const methods = match?.[2];
-    if ((!routePath?.startsWith('/v1/') && routePath !== '/v1') || !methods) return [];
+    const match = line.match(/^((?:(?:│   )|(?:    ))*)(?:[├└]── )(.+?) \(([^)]+)\)$/);
+    const depth = (match?.[1].length ?? 0) / 4;
+    const routeSegment = match?.[2];
+    const methods = match?.[3];
+    if (!routeSegment || !methods) return [];
+
+    const routePath =
+      depth > 0 && routeSegment.startsWith('/')
+        ? `${ancestors[depth - 1] ?? ''}${routeSegment}`
+        : routeSegment;
+    ancestors[depth] = routePath;
+    ancestors.length = depth + 1;
+    if ((!routePath.startsWith('/v1/') && routePath !== '/v1') || !methods) return [];
 
     return methods.split(', ').map((method) => {
       if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].includes(method)) {
@@ -315,6 +340,44 @@ describe('Phase 2.4 tenant isolation', () => {
         },
       });
       expect(insufficientRoleResponse.statusCode).toBe(403);
+    } finally {
+      await adminPool.query(
+        `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
+         VALUES ($1, $2, 'case.read')`,
+        [workspaceIds[0], roleId],
+      );
+    }
+  });
+
+  it('authorizes case detail access and hides foreign cases with 404', async () => {
+    assert.ok(app);
+    const headers = {
+      authorization: `Bearer ${viewerToken}`,
+      'x-workspace-id': workspaceIds[0],
+    };
+    const ownCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[0]}`,
+      headers,
+    });
+    expect(ownCaseResponse.statusCode, ownCaseResponse.body).toBe(200);
+    expect(ownCaseResponse.json()).toMatchObject({ id: caseIds[0], case_number: '101' });
+
+    const foreignCaseResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/cases/${caseIds[1]}`,
+      headers,
+    });
+    expect(foreignCaseResponse.statusCode).toBe(404);
+
+    try {
+      await adminPool.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
+      const insufficientPermissionResponse = await app.inject({
+        method: 'GET',
+        url: `/v1/cases/${caseIds[0]}`,
+        headers,
+      });
+      expect(insufficientPermissionResponse.statusCode).toBe(403);
     } finally {
       await adminPool.query(
         `INSERT INTO role_permissions (workspace_id, role_id, permission_key)

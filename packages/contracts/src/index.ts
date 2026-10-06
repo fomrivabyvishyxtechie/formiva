@@ -61,5 +61,10 @@ export {
   memberInviteRequestSchema,
   memberRoleChangeRequestSchema,
 } from './workspaces.js';
-export { caseListQuerySchema, caseListResponseSchema, caseStatusSchema } from './cases.js';
+export {
+  caseListQuerySchema,
+  caseListResponseSchema,
+  caseStatusSchema,
+  caseSchema,
+} from './cases.js';
 export type { CaseListQuery, CaseListResponse } from './cases.js';
