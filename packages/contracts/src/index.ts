@@ -58,6 +58,8 @@ export {
   workspaceCreateResponseSchema,
   memberSchema,
   workspaceMemberListResponseSchema,
+  workspaceMembersParamsSchema,
+  workspaceMemberParamsSchema,
   memberInviteRequestSchema,
   memberRoleChangeRequestSchema,
 } from './workspaces.js';

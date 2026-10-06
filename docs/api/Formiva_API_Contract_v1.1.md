@@ -219,6 +219,10 @@ One `withTenant()` transaction must resolve form/version; verify consent, revisi
 
 Workspace request example: `{"name":"Synthetic Demo Workspace","slug":"synthetic-demo-workspace"}`. Never accept caller-supplied owner user ID.
 
+The member list, role-change, and removal operations are implemented with JWT authentication, active workspace membership, the `member.manage` permission, and a workspace path that must match the selected tenant. Member responses contain only user ID, role, and status. Role changes and removals append audit events in the same tenant transaction; repeating an unchanged role or removal does not append another event. Only an owner can change/remove an owner, and the last active owner cannot be demoted or removed.
+
+The invitation operation remains blocked: `workspace_members.status = 'invited'` has no invitation token/reference, expiry, or acceptance operation, so it cannot safely provide an invitation lifecycle. Workspace creation is also not yet operational for a new creator: the current route requires an existing membership, while the workspace RLS policy and `app.bootstrap_workspace` require the new workspace to already be the transaction context. Resolving either gap requires an approved schema/authorization design; do not change applied migrations or infer an invite-acceptance flow.
+
 ## 6.2 Forms and immutable versions
 
 | Method | Path | Purpose |

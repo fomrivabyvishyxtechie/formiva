@@ -4,6 +4,7 @@ All meaningful engineering changes should be summarized here.
 
 ## Unreleased
 
+- Implemented owner/admin tenant-scoped workspace member listing, role changes, and soft removal with `member.manage`, last-owner protection, and atomic audit events. Reconciled DB evidence: 107 source SQL assertions and the 12-session 10/10 claim race pass; the separate foundation runner reports 38 assertions. Phase 2 remains blocked on workspace bootstrap/invitation design and reviewer sign-off.
 - Implemented `GET /v1/cases/{case_id}/documents` with `document.read_sensitive`, tenant-scoped case/document joins, and a Zod-validated safe metadata projection that omits filenames, object-store coordinates, scan details, and extracted content.
 - Implemented `POST /v1/cases/{case_id}/cancel` with `case.approve`, legal tenant-scoped status transitions, atomic immutable audit recording, and audit-backed idempotency; added synthetic authorization and PostgreSQL tenant-isolation coverage.
 - Implemented `POST /v1/cases/{case_id}/rework` with `case.approve`, a legal tenant-scoped transition to `review_queued`, atomic audit recording, and audit-backed idempotency; added synthetic auth/state/replay coverage and updated Phase 2 evidence.

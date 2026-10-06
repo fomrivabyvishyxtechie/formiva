@@ -93,16 +93,28 @@ const caseIds = [
 ];
 const userId = randomUUID();
 const approverUserId = randomUUID();
+const ownerUserId = randomUUID();
+const adminUserId = randomUUID();
+const foreignMemberUserId = randomUUID();
 const authSubject = `synthetic_tenant_isolation_${fixtureId}`;
 const approverSubject = `synthetic_tenant_approver_${fixtureId}`;
+const ownerSubject = `synthetic_tenant_owner_${fixtureId}`;
+const adminSubject = `synthetic_tenant_admin_${fixtureId}`;
+const foreignMemberSubject = `synthetic_foreign_member_${fixtureId}`;
 const workspaceKeys = [`tenant-isolation-${fixtureId}-a`, `tenant-isolation-${fixtureId}-b`];
 const roleId = randomUUID();
 const approverRoleId = randomUUID();
+const ownerRoleId = randomUUID();
+const adminRoleId = randomUUID();
+const reviewerRoleId = randomUUID();
+const foreignOwnerRoleId = randomUUID();
 let fixturesCreated = false;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 let unauthenticatedApp: Awaited<ReturnType<typeof buildApp>> | undefined;
 let viewerToken: string;
 let approverToken: string;
+let ownerToken: string;
+let adminToken: string;
 
 const authorizationCoverage: Record<
   string,
@@ -118,6 +130,24 @@ const authorizationCoverage: Record<
     insufficientRole: 'not-applicable',
     authenticatedAccess: 'not-applicable',
     foreignResource: 'not-applicable',
+  },
+  'GET /v1/workspaces/:workspace_id/members': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'PATCH /v1/workspaces/:workspace_id/members/:member_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'DELETE /v1/workspaces/:workspace_id/members/:member_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
   },
   'GET /v1/cases': {
     missingAuth: 401,
@@ -206,6 +236,8 @@ describe('Phase 2.4 tenant isolation', () => {
     const clerk = await createSyntheticClerk();
     viewerToken = await clerk.createToken(authSubject);
     approverToken = await clerk.createToken(approverSubject);
+    ownerToken = await clerk.createToken(ownerSubject);
+    adminToken = await clerk.createToken(adminSubject);
 
     await adminPool.query(
       `INSERT INTO workspaces (id, slug, name)
@@ -217,7 +249,10 @@ describe('Phase 2.4 tenant isolation', () => {
     await adminPool.query(
       `INSERT INTO users (id, auth_subject, email, display_name)
        VALUES ($1, $2, $4, 'Synthetic Tenant Isolation User'),
-              ($3, $5, $6, 'Synthetic Tenant Approver')`,
+              ($3, $5, $6, 'Synthetic Tenant Approver'),
+              ($7, $8, $9, 'Synthetic Tenant Owner'),
+              ($10, $11, $12, 'Synthetic Foreign Tenant Member'),
+              ($13, $14, $15, 'Synthetic Tenant Admin')`,
       [
         userId,
         authSubject,
@@ -225,27 +260,67 @@ describe('Phase 2.4 tenant isolation', () => {
         `${fixtureId}@example.invalid`,
         approverSubject,
         `${fixtureId}-approver@example.invalid`,
+        ownerUserId,
+        ownerSubject,
+        `${fixtureId}-owner@example.invalid`,
+        foreignMemberUserId,
+        foreignMemberSubject,
+        `${fixtureId}-foreign@example.invalid`,
+        adminUserId,
+        adminSubject,
+        `${fixtureId}-admin@example.invalid`,
       ],
     );
     await adminPool.query(
       `INSERT INTO roles (id, workspace_id, name, is_system)
        VALUES ($1, $3, 'viewer', true),
-              ($2, $3, 'approver', true)`,
-      [roleId, approverRoleId, workspaceIds[0]],
+              ($2, $3, 'approver', true),
+              ($4, $3, 'owner', true),
+              ($5, $3, 'reviewer', true),
+              ($6, $7, 'owner', true),
+              ($8, $3, 'admin', true)`,
+      [
+        roleId,
+        approverRoleId,
+        workspaceIds[0],
+        ownerRoleId,
+        reviewerRoleId,
+        foreignOwnerRoleId,
+        workspaceIds[1],
+        adminRoleId,
+      ],
     );
     await adminPool.query(
       `INSERT INTO workspace_members (workspace_id, user_id, role_id, status, joined_at)
        VALUES ($1, $2, $3, 'active', now()),
-              ($1, $4, $5, 'active', now())`,
-      [workspaceIds[0], userId, roleId, approverUserId, approverRoleId],
+              ($1, $4, $5, 'active', now()),
+              ($1, $6, $7, 'active', now()),
+              ($8, $9, $10, 'active', now()),
+              ($1, $11, $12, 'active', now())`,
+      [
+        workspaceIds[0],
+        userId,
+        roleId,
+        approverUserId,
+        approverRoleId,
+        ownerUserId,
+        ownerRoleId,
+        workspaceIds[1],
+        foreignMemberUserId,
+        foreignOwnerRoleId,
+        adminUserId,
+        adminRoleId,
+      ],
     );
     await adminPool.query(
       `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
        VALUES ($1, $2, 'case.read'),
               ($1, $3, 'case.read'),
-       ($1, $3, 'case.approve'),
-       ($1, $3, 'document.read_sensitive')`,
-      [workspaceIds[0], roleId, approverRoleId],
+              ($1, $3, 'case.approve'),
+              ($1, $3, 'document.read_sensitive'),
+              ($1, $4, 'member.manage'),
+              ($1, $5, 'member.manage')`,
+      [workspaceIds[0], roleId, approverRoleId, ownerRoleId, adminRoleId],
     );
     await adminPool.query(
       `INSERT INTO form_templates (id, workspace_id, key, name)
@@ -364,13 +439,13 @@ describe('Phase 2.4 tenant isolation', () => {
         workspaceIds,
       ]);
       await adminPool.query('DELETE FROM role_permissions WHERE role_id = ANY($1::uuid[])', [
-        [roleId, approverRoleId],
+        [roleId, approverRoleId, ownerRoleId, adminRoleId, reviewerRoleId, foreignOwnerRoleId],
       ]);
       await adminPool.query('DELETE FROM roles WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
       await adminPool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [
-        [userId, approverUserId],
+        [userId, approverUserId, ownerUserId, adminUserId, foreignMemberUserId],
       ]);
       await adminPool.query('DELETE FROM form_templates WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
@@ -989,5 +1064,241 @@ describe('Phase 2.4 tenant isolation', () => {
         key_hash: createHash('sha256').update(idempotencyKey).digest('hex'),
       },
     ]);
+  });
+
+  it('lists only members in the selected workspace for an authorized owner', async () => {
+    assert.ok(app);
+    const ownerHeaders = {
+      authorization: `Bearer ${ownerToken}`,
+      'x-workspace-id': workspaceIds[0],
+    };
+    const deniedResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[0]}/members`,
+      headers: { ...ownerHeaders, authorization: `Bearer ${viewerToken}` },
+    });
+    expect(deniedResponse.statusCode).toBe(403);
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[0]}/members`,
+      headers: ownerHeaders,
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual(
+      expect.arrayContaining([
+        { user_id: userId, role: 'viewer', status: 'active' },
+        { user_id: approverUserId, role: 'approver', status: 'active' },
+        { user_id: ownerUserId, role: 'owner', status: 'active' },
+      ]),
+    );
+    expect(response.body).not.toContain(foreignMemberUserId);
+    expect(response.body).not.toContain(`${fixtureId}-foreign@example.invalid`);
+
+    const uppercaseWorkspaceIdResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[0].toUpperCase()}/members`,
+      headers: ownerHeaders,
+    });
+    expect(uppercaseWorkspaceIdResponse.statusCode).toBe(200);
+
+    const adminResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[0]}/members`,
+      headers: { ...ownerHeaders, authorization: `Bearer ${adminToken}` },
+    });
+    expect(adminResponse.statusCode, adminResponse.body).toBe(200);
+
+    const mismatchedPathResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[1]}/members`,
+      headers: ownerHeaders,
+    });
+    expect(mismatchedPathResponse.statusCode).toBe(404);
+
+    const foreignWorkspaceResponse = await app.inject({
+      method: 'GET',
+      url: `/v1/workspaces/${workspaceIds[1]}/members`,
+      headers: { ...ownerHeaders, 'x-workspace-id': workspaceIds[1] },
+    });
+    expect(foreignWorkspaceResponse.statusCode).toBe(404);
+  });
+
+  it('changes member roles, audits atomically, hides foreign members, and protects the last owner', async () => {
+    assert.ok(app);
+    const headers = {
+      authorization: `Bearer ${ownerToken}`,
+      'x-workspace-id': workspaceIds[0],
+      'x-correlation-id': randomUUID(),
+    };
+    const url = `/v1/workspaces/${workspaceIds[0]}/members/${userId}`;
+    const deniedResponse = await app.inject({
+      method: 'PATCH',
+      url,
+      headers: { ...headers, authorization: `Bearer ${viewerToken}` },
+      payload: { role: 'reviewer' },
+    });
+    expect(deniedResponse.statusCode).toBe(403);
+
+    const foreignResponse = await app.inject({
+      method: 'PATCH',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${foreignMemberUserId}`,
+      headers,
+      payload: { role: 'reviewer' },
+    });
+    expect(foreignResponse.statusCode).toBe(404);
+
+    const unknownResponse = await app.inject({
+      method: 'PATCH',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${randomUUID()}`,
+      headers,
+      payload: { role: 'reviewer' },
+    });
+    expect(unknownResponse.statusCode).toBe(404);
+
+    const invalidRoleResponse = await app.inject({
+      method: 'PATCH',
+      url,
+      headers,
+      payload: { role: 'not-a-workspace-role' },
+    });
+    expect(invalidRoleResponse.statusCode).toBe(400);
+
+    const adminOwnerChangeResponse = await app.inject({
+      method: 'PATCH',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${ownerUserId}`,
+      headers: { ...headers, authorization: `Bearer ${adminToken}` },
+      payload: { role: 'reviewer' },
+    });
+    expect(adminOwnerChangeResponse.statusCode).toBe(403);
+
+    const changedResponse = await app.inject({
+      method: 'PATCH',
+      url,
+      headers,
+      payload: { role: 'reviewer' },
+    });
+    expect(changedResponse.statusCode, changedResponse.body).toBe(200);
+    expect(changedResponse.json()).toEqual({
+      user_id: userId,
+      role: 'reviewer',
+      status: 'active',
+    });
+
+    const repeatedChangeResponse = await app.inject({
+      method: 'PATCH',
+      url,
+      headers,
+      payload: { role: 'reviewer' },
+    });
+    expect(repeatedChangeResponse.statusCode).toBe(200);
+    expect(repeatedChangeResponse.json()).toEqual(changedResponse.json());
+
+    const lastOwnerResponse = await app.inject({
+      method: 'PATCH',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${ownerUserId}`,
+      headers,
+      payload: { role: 'reviewer' },
+    });
+    expect(lastOwnerResponse.statusCode).toBe(409);
+
+    const auditResult = await withTenant(appPool, workspaceIds[0], ownerUserId, async (client) =>
+      client.query<{ count: number; action: string; actor_id: string; correlation_id: string }>(
+        `SELECT count(*)::int AS count,
+                min(action) AS action,
+                min(actor_id) AS actor_id,
+                min(correlation_id::text) AS correlation_id
+           FROM audit_events
+          WHERE workspace_id = $1
+            AND object_type = 'workspace_member'
+            AND object_id = $2
+            AND action = 'workspace.member_role_changed'`,
+        [workspaceIds[0], userId],
+      ),
+    );
+    expect(auditResult.rows[0]).toEqual({
+      count: 1,
+      action: 'workspace.member_role_changed',
+      actor_id: ownerUserId,
+      correlation_id: headers['x-correlation-id'],
+    });
+  });
+
+  it('removes memberships with an immutable audit event and idempotent repeat', async () => {
+    assert.ok(app);
+    const headers = {
+      authorization: `Bearer ${ownerToken}`,
+      'x-workspace-id': workspaceIds[0],
+      'x-correlation-id': randomUUID(),
+    };
+    const targetUrl = `/v1/workspaces/${workspaceIds[0]}/members/${approverUserId}`;
+
+    const deniedResponse = await app.inject({
+      method: 'DELETE',
+      url: targetUrl,
+      headers: { ...headers, authorization: `Bearer ${viewerToken}` },
+    });
+    expect(deniedResponse.statusCode).toBe(403);
+
+    const foreignResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${foreignMemberUserId}`,
+      headers,
+    });
+    expect(foreignResponse.statusCode).toBe(404);
+
+    const unknownResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${randomUUID()}`,
+      headers,
+    });
+    expect(unknownResponse.statusCode).toBe(404);
+
+    const lastOwnerResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${ownerUserId}`,
+      headers,
+    });
+    expect(lastOwnerResponse.statusCode).toBe(409);
+
+    const adminOwnerRemovalResponse = await app.inject({
+      method: 'DELETE',
+      url: `/v1/workspaces/${workspaceIds[0]}/members/${ownerUserId}`,
+      headers: { ...headers, authorization: `Bearer ${adminToken}` },
+    });
+    expect(adminOwnerRemovalResponse.statusCode).toBe(403);
+
+    const removedResponse = await app.inject({
+      method: 'DELETE',
+      url: targetUrl,
+      headers,
+    });
+    expect(removedResponse.statusCode, removedResponse.body).toBe(200);
+    expect(removedResponse.json()).toEqual({
+      user_id: approverUserId,
+      role: 'approver',
+      status: 'left',
+    });
+
+    const repeatedResponse = await app.inject({
+      method: 'DELETE',
+      url: targetUrl,
+      headers,
+    });
+    expect(repeatedResponse.statusCode).toBe(200);
+    expect(repeatedResponse.json()).toEqual(removedResponse.json());
+
+    const auditResult = await withTenant(appPool, workspaceIds[0], ownerUserId, async (client) =>
+      client.query<{ count: number; action: string }>(
+        `SELECT count(*)::int AS count, min(action) AS action
+           FROM audit_events
+          WHERE workspace_id = $1
+            AND object_type = 'workspace_member'
+            AND object_id = $2
+            AND action = 'workspace.member_removed'`,
+        [workspaceIds[0], approverUserId],
+      ),
+    );
+    expect(auditResult.rows[0]).toEqual({ count: 1, action: 'workspace.member_removed' });
   });
 });

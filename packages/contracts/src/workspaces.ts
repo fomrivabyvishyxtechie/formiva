@@ -13,17 +13,25 @@ export const workspaceCreateResponseSchema = z.object({
 
 export const memberSchema = z.object({
   user_id: z.string().uuid(),
-  role: z.string(),
-  status: z.string(),
+  role: z.string().min(1),
+  status: z.enum(['invited', 'active', 'suspended', 'left']),
 });
 
 export const workspaceMemberListResponseSchema = z.array(memberSchema);
 
+export const workspaceMembersParamsSchema = z.object({
+  workspace_id: z.string().uuid(),
+});
+
+export const workspaceMemberParamsSchema = workspaceMembersParamsSchema.extend({
+  member_id: z.string().uuid(),
+});
+
 export const memberInviteRequestSchema = z.object({
   email: z.string().email(),
-  role: z.string(),
+  role: z.string().trim().min(1).max(40),
 });
 
 export const memberRoleChangeRequestSchema = z.object({
-  role: z.string(),
+  role: z.string().trim().min(1).max(40),
 });
