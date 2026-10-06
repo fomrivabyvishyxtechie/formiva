@@ -46,6 +46,43 @@ export const caseTimelineResponseSchema = z.object({
   ),
 });
 
+export const caseReworkParamsSchema = z.object({
+  case_id: z.string().uuid(),
+});
+
+export const caseReworkRequestSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(3)
+      .max(500)
+      .refine(
+        (reason) =>
+          ![...reason].some((character) => {
+            const codePoint = character.codePointAt(0);
+            return codePoint !== undefined && (codePoint < 32 || codePoint === 127);
+          }),
+      )
+      .refine(
+        (reason) => !/\b\d{8,}\b|\b\d{4}(?:[ -]\d{4})+\b|\b[A-Z]{5}\d{4}[A-Z]\b/i.test(reason),
+      ),
+  })
+  .strict();
+
+export const caseReworkResponseSchema = z.object({
+  case_id: z.string().uuid(),
+  status: z.literal('review_queued'),
+  correlation_id: z.string().uuid(),
+});
+
+export const caseReworkIdempotencyKeySchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[\x21-\x7e]+$/);
+
 export const caseListResponseSchema = z.object({
   items: z.array(caseSchema),
   limit: z.number().int().min(1).max(100),

@@ -87,6 +87,7 @@ export async function buildApp(
       401: 'Unauthorized',
       403: 'Forbidden',
       404: 'Resource not found',
+      409: 'Conflict',
       503: 'Service unavailable',
     };
     const problemTypes: Record<number, string> = {
@@ -94,6 +95,7 @@ export async function buildApp(
       401: 'unauthorized',
       403: 'forbidden',
       404: 'not-found',
+      409: 'conflict',
       503: 'service-unavailable',
     };
     if (statusCode === 401) reply.header('www-authenticate', 'Bearer');

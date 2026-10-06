@@ -66,6 +66,10 @@ export {
   caseListResponseSchema,
   caseTimelineParamsSchema,
   caseTimelineResponseSchema,
+  caseReworkParamsSchema,
+  caseReworkRequestSchema,
+  caseReworkResponseSchema,
+  caseReworkIdempotencyKeySchema,
   caseStatusSchema,
   caseSchema,
 } from './cases.js';

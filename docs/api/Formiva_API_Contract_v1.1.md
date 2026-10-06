@@ -245,6 +245,24 @@ Reject invalid fields, missing policy, unsupported document classes, published-v
 
 Do not return raw document text, full IDs, credentials, or hidden policy internals.
 
+### Request rework
+
+`POST /v1/cases/{case_id}/rework` requires a valid JWT, active membership in the selected workspace, and the `case.approve` permission. The required request body is:
+
+```json
+{"reason":"Synthetic address evidence needs correction."}
+```
+
+The trimmed reason must be 3–500 printable characters and must not contain a full numeric ID or PAN-shaped value. The request also requires the `Idempotency-Key` header. Rework is allowed only when `app.state_transitions` defines a transition from the current case state to `review_queued`. In one tenant transaction, the API locks the case, changes its status to `review_queued`, and appends a `case.rework_requested` audit event containing the reason, state transition, correlation ID, and a SHA-256 fingerprint of the idempotency key. A failure rolls back both the state change and event.
+
+Successful requests return HTTP 200:
+
+```json
+{"case_id":"00000000-0000-4000-8000-000000000032","status":"review_queued","correlation_id":"00000000-0000-4000-8000-000000000090"}
+```
+
+The reason and idempotency key are never returned. Repeating the same workspace-scoped key, case, and reason returns the original safe result without a second state change or audit event. Reusing the key for a different case or reason returns 409; a new request from a state without a legal transition also returns 409. Missing/invalid reason or key returns 400; missing authentication returns 401; missing permission returns 403; unknown and foreign cases both return 404. No migration is required: idempotency fingerprints are stored in the existing append-only audit event payload.
+
 `GET /v1/cases/{case_id}/timeline` requires a valid JWT, active membership in the selected workspace, and `case.read`. It returns:
 
 ```json

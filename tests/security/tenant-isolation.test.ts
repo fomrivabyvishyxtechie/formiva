@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../apps/api/src/index.js';
@@ -36,11 +36,39 @@ if (
 }
 
 const adminPool = new Pool({ connectionString: databaseUrl, max: 2 });
+type RawAppQuery = (query: string, values?: unknown[]) => Promise<{ rows: unknown[] }>;
+const rawAppQueries = new WeakMap<DbClient, RawAppQuery>();
 const appPool = new Pool({
   connectionString: databaseUrl,
-  max: 2,
-  onConnect: (client) => {
-    void client.query('SET ROLE formiva_app');
+  max: 1,
+  onConnect: async (client) => {
+    const rawQuery = client.query.bind(client) as unknown as RawAppQuery;
+    rawAppQueries.set(client, rawQuery);
+    await rawQuery('SET ROLE formiva_app');
+    await rawQuery('BEGIN');
+
+    let savepointIndex = 0;
+    const savepoints: string[] = [];
+    const queryWithSavepoints = async (query: string, values?: unknown[]) => {
+      if (query === 'BEGIN') {
+        const savepoint = `tenant_isolation_${++savepointIndex}`;
+        savepoints.push(savepoint);
+        return rawQuery(`SAVEPOINT ${savepoint}`);
+      }
+      if (query === 'COMMIT') {
+        const savepoint = savepoints.pop();
+        if (!savepoint) throw new Error('Unexpected transaction commit in tenant test pool.');
+        return rawQuery(`RELEASE SAVEPOINT ${savepoint}`);
+      }
+      if (query === 'ROLLBACK') {
+        const savepoint = savepoints.pop();
+        if (!savepoint) throw new Error('Unexpected transaction rollback in tenant test pool.');
+        await rawQuery(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        return rawQuery(`RELEASE SAVEPOINT ${savepoint}`);
+      }
+      return rawQuery(query, values);
+    };
+    client.query = queryWithSavepoints as DbClient['query'];
   },
 });
 
@@ -48,15 +76,19 @@ const fixtureId = randomUUID();
 const workspaceIds = [randomUUID(), randomUUID()];
 const templateIds = [randomUUID(), randomUUID()];
 const versionIds = [randomUUID(), randomUUID()];
-const caseIds = [randomUUID(), randomUUID()];
+const caseIds = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
 const userId = randomUUID();
+const approverUserId = randomUUID();
 const authSubject = `synthetic_tenant_isolation_${fixtureId}`;
+const approverSubject = `synthetic_tenant_approver_${fixtureId}`;
 const workspaceKeys = [`tenant-isolation-${fixtureId}-a`, `tenant-isolation-${fixtureId}-b`];
 const roleId = randomUUID();
+const approverRoleId = randomUUID();
 let fixturesCreated = false;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 let unauthenticatedApp: Awaited<ReturnType<typeof buildApp>> | undefined;
 let viewerToken: string;
+let approverToken: string;
 
 const authorizationCoverage: Record<
   string,
@@ -86,6 +118,12 @@ const authorizationCoverage: Record<
     foreignResource: 404,
   },
   'GET /v1/cases/:case_id/timeline': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/cases/:case_id/rework': {
     missingAuth: 401,
     insufficientRole: 403,
     authenticatedAccess: 'tested',
@@ -141,6 +179,7 @@ describe('Phase 2.4 tenant isolation', () => {
 
     const clerk = await createSyntheticClerk();
     viewerToken = await clerk.createToken(authSubject);
+    approverToken = await clerk.createToken(approverSubject);
 
     await adminPool.query(
       `INSERT INTO workspaces (id, slug, name)
@@ -151,23 +190,35 @@ describe('Phase 2.4 tenant isolation', () => {
     fixturesCreated = true;
     await adminPool.query(
       `INSERT INTO users (id, auth_subject, email, display_name)
-       VALUES ($1, $2, $3, 'Synthetic Tenant Isolation User')`,
-      [userId, authSubject, `${fixtureId}@example.invalid`],
+       VALUES ($1, $2, $4, 'Synthetic Tenant Isolation User'),
+              ($3, $5, $6, 'Synthetic Tenant Approver')`,
+      [
+        userId,
+        authSubject,
+        approverUserId,
+        `${fixtureId}@example.invalid`,
+        approverSubject,
+        `${fixtureId}-approver@example.invalid`,
+      ],
     );
     await adminPool.query(
       `INSERT INTO roles (id, workspace_id, name, is_system)
-       VALUES ($1, $2, 'viewer', true)`,
-      [roleId, workspaceIds[0]],
+       VALUES ($1, $3, 'viewer', true),
+              ($2, $3, 'approver', true)`,
+      [roleId, approverRoleId, workspaceIds[0]],
     );
     await adminPool.query(
       `INSERT INTO workspace_members (workspace_id, user_id, role_id, status, joined_at)
-       VALUES ($1, $2, $3, 'active', now())`,
-      [workspaceIds[0], userId, roleId],
+       VALUES ($1, $2, $3, 'active', now()),
+              ($1, $4, $5, 'active', now())`,
+      [workspaceIds[0], userId, roleId, approverUserId, approverRoleId],
     );
     await adminPool.query(
       `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
-       VALUES ($1, $2, 'case.read')`,
-      [workspaceIds[0], roleId],
+       VALUES ($1, $2, 'case.read'),
+              ($1, $3, 'case.read'),
+              ($1, $3, 'case.approve')`,
+      [workspaceIds[0], roleId, approverRoleId],
     );
     await adminPool.query(
       `INSERT INTO form_templates (id, workspace_id, key, name)
@@ -198,8 +249,19 @@ describe('Phase 2.4 tenant isolation', () => {
     await adminPool.query(
       `INSERT INTO cases (id, workspace_id, case_number, form_version_id, status)
        VALUES ($1, $3, 101, $5, 'submitted'),
-              ($2, $4, 202, $6, 'submitted')`,
-      [caseIds[0], caseIds[1], workspaceIds[0], workspaceIds[1], versionIds[0], versionIds[1]],
+              ($2, $4, 202, $6, 'submitted'),
+              ($7, $3, 103, $5, 'draft'),
+              ($8, $3, 104, $5, 'approval_pending')`,
+      [
+        caseIds[0],
+        caseIds[1],
+        workspaceIds[0],
+        workspaceIds[1],
+        versionIds[0],
+        versionIds[1],
+        caseIds[2],
+        caseIds[3],
+      ],
     );
 
     app = await buildApp(
@@ -220,6 +282,10 @@ describe('Phase 2.4 tenant isolation', () => {
   afterAll(async () => {
     if (app) await app.close();
     if (unauthenticatedApp) await unauthenticatedApp.close();
+    const transactionClient = await appPool.connect();
+    const rawQuery = rawAppQueries.get(transactionClient);
+    if (rawQuery) await rawQuery('ROLLBACK');
+    transactionClient.release();
     if (fixturesCreated) {
       await adminPool.query('DELETE FROM cases WHERE id = ANY($1::uuid[])', [caseIds]);
       await adminPool.query('DELETE FROM form_template_versions WHERE id = ANY($1::uuid[])', [
@@ -228,11 +294,15 @@ describe('Phase 2.4 tenant isolation', () => {
       await adminPool.query('DELETE FROM workspace_members WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
-      await adminPool.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
+      await adminPool.query('DELETE FROM role_permissions WHERE role_id = ANY($1::uuid[])', [
+        [roleId, approverRoleId],
+      ]);
       await adminPool.query('DELETE FROM roles WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
-      await adminPool.query('DELETE FROM users WHERE id = $1', [userId]);
+      await adminPool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [
+        [userId, approverUserId],
+      ]);
       await adminPool.query('DELETE FROM form_templates WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
       ]);
@@ -436,5 +506,181 @@ describe('Phase 2.4 tenant isolation', () => {
         [workspaceIds[0], roleId],
       );
     }
+  });
+
+  it('authorizes rework requests and returns safe errors for foreign, unknown, and invalid-state cases', async () => {
+    assert.ok(app);
+    const headers = {
+      authorization: `Bearer ${approverToken}`,
+      'x-workspace-id': workspaceIds[0],
+      'idempotency-key': `tenant-isolation-rework-${fixtureId}`,
+    };
+    const body = { reason: 'Synthetic fixture needs corrected address evidence.' };
+
+    const foreignCaseResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[1]}/rework`,
+      headers,
+      payload: body,
+    });
+    expect(foreignCaseResponse.statusCode).toBe(404);
+
+    const unknownCaseResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${randomUUID()}/rework`,
+      headers,
+      payload: body,
+    });
+    expect(unknownCaseResponse.statusCode).toBe(404);
+
+    const wrongRoleResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers: { ...headers, authorization: `Bearer ${viewerToken}` },
+      payload: body,
+    });
+    expect(wrongRoleResponse.statusCode).toBe(403);
+
+    const missingReasonResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers,
+      payload: {},
+    });
+    expect(missingReasonResponse.statusCode).toBe(400);
+
+    const missingIdempotencyKeyResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers: {
+        authorization: headers.authorization,
+        'x-workspace-id': headers['x-workspace-id'],
+      },
+      payload: body,
+    });
+    expect(missingIdempotencyKeyResponse.statusCode).toBe(400);
+
+    const unsafeReasonResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers,
+      payload: { reason: 'Review full ID 123456789012 before rework.' },
+    });
+    expect(unsafeReasonResponse.statusCode).toBe(400);
+
+    const formattedIdReasonResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers,
+      payload: { reason: 'Please review ID 1234-5678-9012.' },
+    });
+    expect(formattedIdReasonResponse.statusCode).toBe(400);
+
+    const invalidStateResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[2]}/rework`,
+      headers,
+      payload: body,
+    });
+    expect(invalidStateResponse.statusCode).toBe(409);
+    expect(invalidStateResponse.json().detail).not.toContain('draft');
+
+    const reworkCaseId = caseIds[3];
+    const reworkCorrelationId = randomUUID();
+    const idempotencyKey = `tenant-isolation-rework-${fixtureId}`;
+    const reworkHeaders = {
+      ...headers,
+      'x-correlation-id': reworkCorrelationId,
+      'idempotency-key': idempotencyKey,
+    };
+    const firstReworkResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${reworkCaseId}/rework`,
+      headers: reworkHeaders,
+      payload: body,
+    });
+    expect(firstReworkResponse.statusCode, firstReworkResponse.body).toBe(200);
+    expect(firstReworkResponse.json()).toEqual({
+      case_id: reworkCaseId,
+      status: 'review_queued',
+      correlation_id: reworkCorrelationId,
+    });
+    expect(firstReworkResponse.body).not.toContain(body.reason);
+    expect(firstReworkResponse.body).not.toContain(idempotencyKey);
+
+    const retryResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${reworkCaseId}/rework`,
+      headers: { ...reworkHeaders, 'x-correlation-id': randomUUID() },
+      payload: body,
+    });
+    expect(retryResponse.statusCode).toBe(200);
+    expect(retryResponse.json()).toEqual(firstReworkResponse.json());
+
+    const crossCaseKeyReuse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${caseIds[0]}/rework`,
+      headers: reworkHeaders,
+      payload: body,
+    });
+    expect(crossCaseKeyReuse.statusCode).toBe(409);
+
+    const changedBodyResponse = await app.inject({
+      method: 'POST',
+      url: `/v1/cases/${reworkCaseId}/rework`,
+      headers: reworkHeaders,
+      payload: { reason: 'A different synthetic rework reason.' },
+    });
+    expect(changedBodyResponse.statusCode).toBe(409);
+
+    const persistedRework = await withTenant(
+      appPool,
+      workspaceIds[0],
+      approverUserId,
+      async (client) =>
+        client.query<{
+          status: string;
+          event_count: number;
+          action: string | null;
+          reason: string | null;
+          actor_id: string | null;
+          correlation_id: string | null;
+          from_status: string | null;
+          to_status: string | null;
+          key_hash: string | null;
+        }>(
+          `SELECT c.status,
+                  count(ae.id)::int AS event_count,
+                  min(ae.action) AS action,
+                  min(ae.reason) AS reason,
+                  min(ae.actor_id) AS actor_id,
+                  min(ae.correlation_id::text) AS correlation_id,
+                  min(ae.payload->>'from_status') AS from_status,
+                  min(ae.payload->>'to_status') AS to_status,
+                  min(ae.payload->>'idempotency_key_hash') AS key_hash
+             FROM cases c
+             LEFT JOIN audit_events ae
+               ON ae.workspace_id = c.workspace_id
+              AND ae.object_type = 'case'
+              AND ae.object_id = c.id::text
+              AND ae.action = 'case.rework_requested'
+            WHERE c.id = $1 AND c.workspace_id = $2
+            GROUP BY c.status`,
+          [reworkCaseId, workspaceIds[0]],
+        ),
+    );
+    expect(persistedRework.rows).toEqual([
+      {
+        status: 'review_queued',
+        event_count: 1,
+        action: 'case.rework_requested',
+        reason: body.reason,
+        actor_id: approverUserId,
+        correlation_id: reworkCorrelationId,
+        from_status: 'approval_pending',
+        to_status: 'review_queued',
+        key_hash: createHash('sha256').update(idempotencyKey).digest('hex'),
+      },
+    ]);
   });
 });

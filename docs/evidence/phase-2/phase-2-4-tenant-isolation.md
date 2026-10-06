@@ -17,8 +17,9 @@ The suite reads the current Fastify route inventory and requires a matching auth
 | `GET /v1/cases` | PASS — 401 | PASS — 403 without `case.read`; viewer with permission receives only selected-workspace cases |
 | `GET /v1/cases/{case_id}` | PASS — 401 | PASS — 403 without `case.read`; own case is readable and foreign case returns 404 |
 | `GET /v1/cases/{case_id}/timeline` | PASS — 401 | PASS — 403 without `case.read`; own timeline is readable; foreign and unknown case IDs both return 404 |
+| `POST /v1/cases/{case_id}/rework` | PASS — 401 | PASS — 403 without `case.approve`; approver access is authorized, foreign/unknown case IDs return 404 |
 
-The case list also returns safe 404 when the authenticated viewer selects the other workspace. Timeline access requires a valid JWT, active selected-workspace membership, and `case.read`. The response returns only timestamp, correlation ID, and a fixed event label; tests confirm audit payload, actor/object IDs, credentials, document text, full synthetic ID numbers, and policy internals are omitted.
+The case list also returns safe 404 when the authenticated viewer selects the other workspace. Timeline access requires a valid JWT, active selected-workspace membership, and `case.read`. The response returns only timestamp, correlation ID, and a fixed event label; tests confirm audit payload, actor/object IDs, credentials, document text, full synthetic ID numbers, and policy internals are omitted. Rework requires a safe reason and idempotency key, checks the database state-transition catalog under a case row lock, then updates the status and appends the audit event atomically. The live PostgreSQL test confirms one durable transition and audit event; same-key/same-reason retries return the original result without a duplicate event. Changed-body or cross-case key reuse and illegal state transitions return 409.
 
 ## Foreign identifier coverage
 
@@ -29,7 +30,8 @@ The approved API contract defines the following areas, but the corresponding ope
 | Case | `GET /v1/cases` | Implemented and tested: JWT auth, matching workspace membership, `case.read`, pagination/status filter, selected-workspace rows only |
 | Case | `GET /v1/cases/{case_id}` | Implemented and tested: JWT, membership, `case.read`, tenant-scoped lookup, foreign-case 404 |
 | Case | `GET /v1/cases/{case_id}/timeline` | Implemented and tested: JWT, membership, `case.read`, correlation-linked redacted projection, foreign-case 404 |
-| Case | Rework/cancel | Pending — not implemented |
+| Case | `POST /v1/cases/{case_id}/rework` | Implemented and tested: `case.approve`, safe reason, legal `review_queued` transition, atomic audit event, idempotent replay, foreign/unknown 404 |
+| Case | `POST /v1/cases/{case_id}/cancel` | Pending — not implemented |
 | Document | `/v1/documents/{document_id}` and case documents/view-links/reprocess/quarantine | Pending — no document routes registered |
 | Job | Internal `/v1/ai/jobs` | Pending — no AI job route registered |
 | Result | No result-specific endpoint is defined in API Contract v1.1 | Not applicable to current contract; result data has no registered route |
@@ -50,7 +52,9 @@ Foreign identifiers for these unavailable operations have no live endpoint again
 - Case list issued with workspace A context contains A's synthetic case and not B's; selecting B returns 404.
 - Case list requires `case.read`; removing the permission returns 403, and invalid pagination returns 400.
 - Case timeline lookup filters on the authorized workspace and case, and only selects timestamp/correlation columns from matching audit events.
-- Tenant-isolation suite runtime: 2.33 seconds total; test body reported 1.095 seconds.
+- Rework requires `case.approve`; a viewer without the permission receives 403. Missing reason/key returns 400; unsafe full-ID reason is rejected; an illegal state returns 409 without disclosing the state.
+- Rework serializes per-case requests with `SELECT ... FOR UPDATE` and workspace-scoped idempotency keys with a transaction advisory lock; same-key/same-case/same-reason retry returns the original result without another state update or audit write; changed reason or case reuse returns 409.
+- Tenant-isolation suite runtime: 3.01 seconds total; test body reported 1.78 seconds.
 
 ## Commands and results
 
@@ -58,9 +62,9 @@ All commands ran with the disposable local `DATABASE_URL` configured in the shel
 
 | Command | Result |
 | --- | --- |
-| `pnpm exec vitest run tests/security/tenant-isolation.test.ts` | PASS — 1 file, 6 tests |
+| `pnpm exec vitest run tests/security/tenant-isolation.test.ts` | PASS — 1 file, 7 tests |
 | `pnpm --filter @formiva/db run test` | PASS — script reported “Phase 2.1 database tests passed”; it does not emit an assertion count |
-| `pnpm --filter @formiva/api run test` | PASS — 6 files, 20 tests |
+| `pnpm --filter @formiva/api run test` | PASS — 6 files, 21 tests |
 | `pnpm run format:check` | PASS |
 | `pnpm exec prettier --check tests/security/tenant-isolation.test.ts` | PASS |
 | `pnpm run lint` | PASS |
@@ -72,4 +76,4 @@ The repository lint and format scripts do not include the root-level `tests/secu
 
 ## Status and follow-up
 
-Current registered-route tenant-isolation coverage, including case list, detail, and timeline, is verified after the checks recorded above. Phase 2.4 is not complete for the full planned API surface: document, job, workflow, integration, audit, and future billing/result operations remain pending or not applicable until implemented. Do not treat this evidence as full endpoint-level coverage or as a Phase 2 exit sign-off.
+Current registered-route tenant-isolation coverage, including case list, detail, timeline, and rework, is verified after the checks recorded above. Phase 2.4 is not complete for the full planned API surface: document, job, workflow, integration, audit, and future billing/result operations remain pending or not applicable until implemented. Do not treat this evidence as full endpoint-level coverage or as a Phase 2 exit sign-off.
