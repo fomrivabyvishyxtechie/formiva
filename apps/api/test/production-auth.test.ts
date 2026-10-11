@@ -6,6 +6,7 @@ const clerkConfiguration = {
   CLERK_AUDIENCE: 'formiva-api-synthetic',
   CLERK_JWKS_URL: 'https://issuer.synthetic.invalid/.well-known/jwks.json',
   CLERK_AUTHORIZED_PARTIES: 'https://formiva.synthetic.invalid',
+  CLERK_SECRET_KEY: 'sk_test_synthetic',
 };
 
 describe('Production auth config', () => {

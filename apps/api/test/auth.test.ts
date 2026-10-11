@@ -173,7 +173,7 @@ describe('Fastify auth and workspace authorization', () => {
 
   afterAll(async () => {
     if (app) await app.close();
-    await authPool.end();
+    if (authPool) await authPool.end();
     await adminPool.query('DELETE FROM workspace_members WHERE workspace_id = ANY($1::uuid[])', [
       [firstWorkspaceId, foreignWorkspaceId],
     ]);

@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { Pool } from 'pg';
 import { z } from 'zod';
+import { createHash } from 'node:crypto';
 import { getOrCreateCorrelationId } from '@formiva/observability';
-import { withAuthorizedTenant } from '@formiva/db';
 import {
   memberRoleChangeRequestSchema,
   memberSchema,
@@ -11,6 +11,7 @@ import {
   workspaceMemberListResponseSchema,
   workspaceMemberParamsSchema,
   workspaceMembersParamsSchema,
+  idempotencyKeySchema,
 } from '@formiva/contracts';
 
 function routeError(statusCode: number, message: string) {
@@ -20,42 +21,58 @@ function routeError(statusCode: number, message: string) {
 export async function registerWorkspaceRoutes(app: FastifyInstance, pool: Pool) {
   app.post('/v1/workspaces', async (request, reply) => {
     const identity = request.authIdentity;
-    if (!identity) {
-      return reply.code(401).send({ error: 'Unauthorized' });
-    }
+    if (!identity) throw routeError(401, 'Authentication is required.');
 
-    const body = workspaceCreateRequestSchema.parse(request.body);
+    const body = workspaceCreateRequestSchema.safeParse(request.body);
+    if (!body.success) throw routeError(400, 'Invalid request body.');
+    const idempotencyKey = idempotencyKeySchema.safeParse(request.headers['idempotency-key']);
+    if (!idempotencyKey.success) throw routeError(400, 'Idempotency-Key is required.');
+    const keyHash = createHash('sha256').update(idempotencyKey.data).digest();
+    const requestHash = createHash('sha256')
+      .update(
+        JSON.stringify({ name: body.data.name.trim(), slug: body.data.slug.trim().toLowerCase() }),
+      )
+      .digest();
 
-    return await withAuthorizedTenant(
-      pool,
-      identity.subject,
-      undefined,
-      {},
-      async (client, context) => {
-        // Bootstrap workspace
-        const result = await client.query(
-          'INSERT INTO workspaces (name, slug, status) VALUES ($1, $2, $3) RETURNING id',
-          [body.name, body.slug, 'active'],
+    try {
+      const result = await pool.query<{
+        workspace_id: string;
+        name: string;
+        slug: string;
+        replay: boolean;
+      }>('SELECT * FROM app.bootstrap_workspace($1, $2, $3::citext, $4, $5)', [
+        identity.subject,
+        body.data.name,
+        body.data.slug,
+        keyHash,
+        requestHash,
+      ]);
+      const workspace = result.rows[0];
+      if (!workspace) throw routeError(500, 'Workspace bootstrap failed.');
+      return reply.code(workspace.replay ? 200 : 201).send(
+        workspaceCreateResponseSchema.parse({
+          id: workspace.workspace_id,
+          name: workspace.name,
+          slug: workspace.slug,
+        }),
+      );
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (code === '23505' || code === 'P0001')
+        throw routeError(
+          409,
+          'Workspace slug or idempotency key conflicts with an existing request.',
         );
-        const workspaceId = result.rows[0].id;
-
-        // Bootstrap workspace using system function
-        await client.query('SELECT app.bootstrap_workspace($1, $2)', [workspaceId, context.userId]);
-
-        const response = workspaceCreateResponseSchema.parse({
-          id: workspaceId,
-          name: body.name,
-          slug: body.slug,
-        });
-
-        return reply.code(201).send(response);
-      },
-    );
+      if (code === '22023') throw routeError(400, 'Invalid workspace bootstrap request.');
+      if (code === '28000')
+        throw routeError(403, 'A verified identity is required to create a workspace.');
+      throw error;
+    }
   });
 
   app.get('/v1/workspaces/:workspace_id/members', async (request, reply) => {
     const withTenant = request.withTenant;
-    if (!withTenant) return reply.code(401).send({ error: 'Authentication is required.' });
+    if (!withTenant) throw routeError(401, 'Authentication is required.');
 
     const parsedParams = workspaceMembersParamsSchema.safeParse(request.params);
     if (!parsedParams.success) throw routeError(400, 'Workspace ID is invalid.');
@@ -81,13 +98,13 @@ export async function registerWorkspaceRoutes(app: FastifyInstance, pool: Pool) 
       },
     );
 
-    if (!response) return reply.code(404).send({ error: 'Workspace not found.' });
+    if (!response) throw routeError(404, 'Workspace not found.');
     return reply.send(response);
   });
 
   app.patch('/v1/workspaces/:workspace_id/members/:member_id', async (request, reply) => {
     const withTenant = request.withTenant;
-    if (!withTenant) return reply.code(401).send({ error: 'Authentication is required.' });
+    if (!withTenant) throw routeError(401, 'Authentication is required.');
 
     const parsedParams = workspaceMemberParamsSchema.safeParse(request.params);
     if (!parsedParams.success) throw routeError(400, 'Workspace member ID is invalid.');
@@ -198,7 +215,7 @@ export async function registerWorkspaceRoutes(app: FastifyInstance, pool: Pool) 
       },
     );
 
-    if (!response) return reply.code(404).send({ error: 'Workspace member not found.' });
+    if (!response) throw routeError(404, 'Workspace member not found.');
     if (response.kind === 'invalid-role') throw routeError(400, 'Workspace role is invalid.');
     if (response.kind === 'forbidden') {
       throw routeError(403, 'You do not have permission to assign or change an owner role.');
@@ -211,7 +228,7 @@ export async function registerWorkspaceRoutes(app: FastifyInstance, pool: Pool) 
 
   app.delete('/v1/workspaces/:workspace_id/members/:member_id', async (request, reply) => {
     const withTenant = request.withTenant;
-    if (!withTenant) return reply.code(401).send({ error: 'Authentication is required.' });
+    if (!withTenant) throw routeError(401, 'Authentication is required.');
 
     const parsedParams = workspaceMemberParamsSchema.safeParse(request.params);
     if (!parsedParams.success) throw routeError(400, 'Workspace member ID is invalid.');
@@ -301,7 +318,7 @@ export async function registerWorkspaceRoutes(app: FastifyInstance, pool: Pool) 
       },
     );
 
-    if (!response) return reply.code(404).send({ error: 'Workspace member not found.' });
+    if (!response) throw routeError(404, 'Workspace member not found.');
     if (response.kind === 'forbidden') {
       throw routeError(403, 'You do not have permission to remove an owner.');
     }

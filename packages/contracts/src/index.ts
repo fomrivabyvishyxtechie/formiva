@@ -62,6 +62,7 @@ export {
   workspaceMemberParamsSchema,
   memberInviteRequestSchema,
   memberRoleChangeRequestSchema,
+  idempotencyKeySchema,
 } from './workspaces.js';
 export {
   caseListQuerySchema,
@@ -81,4 +82,12 @@ export {
   caseStatusSchema,
   caseSchema,
 } from './cases.js';
+export {
+  invitationRequestSchema,
+  invitationAcceptRequestSchema,
+  invitationResponseSchema,
+  invitationAcceptResponseSchema,
+  invitationParamsSchema,
+  invitationDeleteParamsSchema,
+} from './invitations.js';
 export type { CaseListQuery, CaseListResponse } from './cases.js';

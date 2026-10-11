@@ -11,11 +11,15 @@ import {
 } from '@formiva/observability';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
+import { registerInvitationRoutes } from './routes/invitations.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 
 export async function buildApp(
   env: Record<string, string | undefined> = process.env,
-  dependencies: { pool?: Pool; auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode'> } = {},
+  dependencies: {
+    pool?: Pool;
+    auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode' | 'identityLookup'>;
+  } = {},
 ) {
   const rawEnvironment = { ...process.env, ...env };
   const config = loadConfig(rawEnvironment);
@@ -28,6 +32,7 @@ export async function buildApp(
     !rawEnvironment.CLERK_AUDIENCE && 'CLERK_AUDIENCE',
     !rawEnvironment.CLERK_JWKS_URL && 'CLERK_JWKS_URL',
     !authorizedParties?.length && 'CLERK_AUTHORIZED_PARTIES',
+    !rawEnvironment.CLERK_SECRET_KEY && 'CLERK_SECRET_KEY',
   ].filter((name): name is string => Boolean(name));
 
   if (rawEnvironment.NODE_ENV !== 'test' && missingClerkConfiguration.length > 0) {
@@ -48,11 +53,13 @@ export async function buildApp(
     authorizedParties,
     jwksFetch: dependencies.auth?.jwksFetch,
     testMode,
+    identityLookup: dependencies.auth?.identityLookup,
   });
 
   if (dependencies.pool) {
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
+    await registerInvitationRoutes(app, dependencies.pool);
   }
 
   app.addHook('onRequest', async (request, reply) => {

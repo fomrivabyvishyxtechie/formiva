@@ -131,6 +131,24 @@ const authorizationCoverage: Record<
     authenticatedAccess: 'not-applicable',
     foreignResource: 'not-applicable',
   },
+  'POST /v1/workspaces/:workspace_id/members/invitations': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/invitations/accept': {
+    missingAuth: 401,
+    insufficientRole: 'not-applicable',
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'DELETE /v1/invitations/:invitation_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
   'GET /v1/workspaces/:workspace_id/members': {
     missingAuth: 401,
     insufficientRole: 403,

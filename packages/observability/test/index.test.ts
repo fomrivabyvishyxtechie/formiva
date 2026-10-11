@@ -22,8 +22,10 @@ describe('observability', () => {
       nested: {
         password: 'hunter2',
         token: 'abc123',
+        email: 'ada@example.test',
         keep: 'safe',
       },
+      message: 'Identity lookup failed for ada@example.test',
     };
 
     expect(redactSensitiveData(payload)).toEqual({
@@ -31,8 +33,10 @@ describe('observability', () => {
       nested: {
         password: '[REDACTED]',
         token: '[REDACTED]',
+        email: '[REDACTED]',
         keep: 'safe',
       },
+      message: 'Identity lookup failed for [REDACTED_EMAIL]',
     });
   });
 

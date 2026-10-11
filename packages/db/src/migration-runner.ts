@@ -8,17 +8,19 @@ export async function runMigrations(pool: Pool) {
   try {
     await client.query('BEGIN');
 
-    // Ensure migration table exists
-    const metadataSql = fs.readFileSync(
-      path.join(__dirname, '../migrations/009_migration_metadata.sql'),
-      'utf8',
+    // Same DDL as 009; the runner must read this ledger before 009 can run on a fresh database.
+    await client.query(
+      `CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        checksum TEXT NOT NULL,
+        applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      )`,
     );
-    await client.query(metadataSql);
 
     const migrationFiles = fs
       .readdirSync(path.join(__dirname, '../migrations'))
-      .filter((f) => f.endsWith('.sql') && f !== '009_migration_metadata.sql')
-      .sort();
+      .filter((f) => f.endsWith('.sql'))
+      .sort((a, b) => parseInt(a) - parseInt(b));
 
     for (const filename of migrationFiles) {
       const version = parseInt(filename.split('_')[0] ?? '', 10);

@@ -1,9 +1,18 @@
 import { z } from 'zod';
 
-export const workspaceCreateRequestSchema = z.object({
-  name: z.string().min(1),
-  slug: z.string().min(1),
-});
+export const workspaceCreateRequestSchema = z
+  .object({
+    name: z.string().trim().min(1).max(120),
+    slug: z
+      .string()
+      .trim()
+      .min(1)
+      .max(63)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/i),
+  })
+  .strict();
+
+export const idempotencyKeySchema = z.string().trim().min(1).max(200);
 
 export const workspaceCreateResponseSchema = z.object({
   id: z.string().uuid(),

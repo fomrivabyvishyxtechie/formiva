@@ -15,6 +15,7 @@ import {
   type TenantAuthorizationContext,
   type TenantAuthorizationRequirements,
 } from '@formiva/db';
+import { syncUserIdentity, type ClerkUserLookup } from './services/identity.js';
 
 export interface AuthenticatedIdentity {
   subject: string;
@@ -33,6 +34,7 @@ export interface AuthPluginOptions {
   authorizedParties?: readonly string[];
   jwksFetch?: FetchImplementation;
   testMode?: boolean;
+  identityLookup?: ClerkUserLookup;
 }
 
 declare module 'fastify' {
@@ -54,6 +56,10 @@ class AuthenticationError extends Error {
 
 function isWorkspaceRoute(url: string | undefined): boolean {
   return url === '/v1' || url?.startsWith('/v1/') === true;
+}
+
+function isPreMembershipRoute(url: string | undefined): boolean {
+  return url === '/v1/workspaces' || url === '/v1/invitations/accept';
 }
 
 function getWorkspaceSelector(request: FastifyRequest): string | undefined {
@@ -151,6 +157,29 @@ const authPlugin: FastifyPluginAsync<AuthPluginOptions> = async (app, options) =
 
     const identity = await verifyRequest(request, options, jwks);
     request.authIdentity = identity;
+
+    // Test JWT fixtures deliberately exercise authorization without any network identity call.
+    // Production always revalidates through the Clerk Backend API before protected operations.
+    if (options.pool && process.env.NODE_ENV !== 'test') {
+      try {
+        await syncUserIdentity(options.pool, identity.subject, options.identityLookup);
+      } catch (error) {
+        request.log.error(
+          {
+            event: 'trusted_identity_sync_failed',
+            failure: error instanceof Error ? error.name : 'unknown',
+          },
+          'Trusted identity synchronization failed.',
+        );
+        throw new AuthenticationError(503, 'Trusted identity verification is unavailable.');
+      }
+    }
+
+    if (isPreMembershipRoute(request.routeOptions.url)) {
+      if (request.headers['x-workspace-id'] !== undefined)
+        throw new AuthenticationError(400, 'X-Workspace-Id is not accepted on this route.');
+      return;
+    }
 
     const workspaceSelector = getWorkspaceSelector(request);
     const pool = options.pool;

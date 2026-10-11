@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@clerk/backend": "^3.23.1",
     "@formiva/config": "workspace:*",
     "@formiva/contracts": "workspace:*",
     "@formiva/db": "workspace:^",
