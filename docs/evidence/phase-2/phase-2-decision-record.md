@@ -35,9 +35,12 @@ Open risks:
   2. workspace_bootstrap_idempotency has no RLS; protected only by having no grants to formiva_app.
   3. Definer roles hold BYPASSRLS (existing design); app.audit_chain is SECURITY DEFINER owned by the migration admin and executable by PUBLIC (trigger-only).
   4. ADR-19 security/technical approvals pending; verified-email trust path needs independent re-review.
-  5. `pnpm dev` cannot start the API (ESM importing CJS @formiva/db); API has only run inside tests.
+  5. (Resolved) API could not start with `pnpm dev` (ESM importing CJS @formiva/db); fixed with explicit named exports in packages/db/src/index.ts; `pnpm --filter @formiva/api run smoke` starts the real server.
   6. Permission-cache expiry for removed/suspended members is not tested with a clock.
 Decision: RESTRICTED
 If restricted, allowed use: synthetic-data development and demos only; no customer data; no Phase 3 until reviewer signs.
 Next action and owner: Technical reviewer reads auth/RLS code and ADR-19, signs this record or lists required changes - reviewer; founder commits the work.
 ```
+
+## Reviewer Packet
+Reviewer instructions and evidence: [../../reviews/phase-2-reviewer-packet.md](../../reviews/phase-2-reviewer-packet.md)
