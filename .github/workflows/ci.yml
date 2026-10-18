@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Disposable PostgreSQL 16 for the database, API and tenant-isolation tests.
-    # Throwaway test credentials only; they match the local Docker test database.
+    # Throwaway test credentials only. Host port 55432 is required: the repo's test scripts refuse any other port.
     services:
       postgres:
         image: postgres:16
@@ -27,14 +27,14 @@ jobs:
           POSTGRES_PASSWORD: formiva_test_only
           POSTGRES_DB: formiva_test
         ports:
-          - 5432:5432
+          - 55432:5432
         options: >-
           --health-cmd "pg_isready -U formiva_test -d formiva_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgresql://formiva_test:formiva_test_only@127.0.0.1:5432/formiva_test
+      DATABASE_URL: postgresql://formiva_test:formiva_test_only@127.0.0.1:55432/formiva_test
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

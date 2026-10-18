@@ -10,8 +10,10 @@ coverage/
 !.env.example
 **/.env.local
 
-# local tool settings and scratch files
+# local tool settings, downloaded third-party skills and scratch files
 .claude/settings.local.json
+.claude/settings.json
+.claude/skills/
 *.patch
 *TEMPtest_error.txt
 *.log
