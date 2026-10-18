@@ -82,6 +82,7 @@ export {
   caseStatusSchema,
   caseSchema,
 } from './cases.js';
+export { formDefinitionSchema, validateFormDefinition, computeSchemaHash } from './forms.js';
 export {
   invitationRequestSchema,
   invitationAcceptRequestSchema,
