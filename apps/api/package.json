@@ -11,9 +11,11 @@
     "lint": "eslint \"src/**/*.ts\" --max-warnings 0",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "smoke": "tsx test/smoke-test.ts"
   },
   "dependencies": {
+    "@clerk/backend": "^3.23.1",
     "@formiva/config": "workspace:*",
     "@formiva/contracts": "workspace:*",
     "@formiva/db": "workspace:^",

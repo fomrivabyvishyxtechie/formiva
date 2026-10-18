@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 const SENSITIVE_KEY_PATTERN =
-  /(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[-_]?key|secret|password|token|session|jwt|bearer)/i;
+  /(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[-_]?key|secret|password|token|session|jwt|bearer|email)/i;
 
 export function generateRequestId(): string {
   return randomUUID();
@@ -46,7 +46,8 @@ export function redactSensitiveData<T>(value: T): T {
       .replace(/(Authorization\s*:\s*Bearer\s+)[\w\-._~+/]+=*/gi, '$1[REDACTED]')
       .replace(/(password\s*[:=]\s*)([^,\s]+)/gi, '$1[REDACTED]')
       .replace(/(token\s*[:=]\s*)([^,\s]+)/gi, '$1[REDACTED]')
-      .replace(/(api[_-]?key\s*[:=]\s*)([^,\s]+)/gi, '$1[REDACTED]') as T;
+      .replace(/(api[_-]?key\s*[:=]\s*)([^,\s]+)/gi, '$1[REDACTED]')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED_EMAIL]') as T;
   }
 
   if (Array.isArray(value)) {

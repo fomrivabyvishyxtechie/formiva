@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../apps/api/src/index.js';
+import type { RouteSecurity } from '../../apps/api/src/security-metadata.js';
 import { createSyntheticClerk } from '../../apps/api/test/support/synthetic-clerk.js';
 import { runMigrations, withAuthorizedTenant, withTenant } from '../../packages/db/src/index.js';
 
@@ -96,11 +97,13 @@ const approverUserId = randomUUID();
 const ownerUserId = randomUUID();
 const adminUserId = randomUUID();
 const foreignMemberUserId = randomUUID();
+const guestUserId = randomUUID();
 const authSubject = `synthetic_tenant_isolation_${fixtureId}`;
 const approverSubject = `synthetic_tenant_approver_${fixtureId}`;
 const ownerSubject = `synthetic_tenant_owner_${fixtureId}`;
 const adminSubject = `synthetic_tenant_admin_${fixtureId}`;
 const foreignMemberSubject = `synthetic_foreign_member_${fixtureId}`;
+const guestSubject = `synthetic_tenant_guest_${fixtureId}`;
 const workspaceKeys = [`tenant-isolation-${fixtureId}-a`, `tenant-isolation-${fixtureId}-b`];
 const roleId = randomUUID();
 const approverRoleId = randomUUID();
@@ -108,6 +111,7 @@ const ownerRoleId = randomUUID();
 const adminRoleId = randomUUID();
 const reviewerRoleId = randomUUID();
 const foreignOwnerRoleId = randomUUID();
+const guestRoleId = randomUUID();
 let fixturesCreated = false;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 let unauthenticatedApp: Awaited<ReturnType<typeof buildApp>> | undefined;
@@ -115,6 +119,8 @@ let viewerToken: string;
 let approverToken: string;
 let ownerToken: string;
 let adminToken: string;
+let guestToken: string;
+let foreignToken: string;
 
 const authorizationCoverage: Record<
   string,
@@ -130,6 +136,24 @@ const authorizationCoverage: Record<
     insufficientRole: 'not-applicable',
     authenticatedAccess: 'not-applicable',
     foreignResource: 'not-applicable',
+  },
+  'POST /v1/workspaces/:workspace_id/members/invitations': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/invitations/accept': {
+    missingAuth: 401,
+    insufficientRole: 'not-applicable',
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'DELETE /v1/invitations/:invitation_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
   },
   'GET /v1/workspaces/:workspace_id/members': {
     missingAuth: 401,
@@ -223,6 +247,80 @@ function injectPath(routePath: string): string {
     .replace(/:([A-Za-z][\w]*)/g, () => randomUUID());
 }
 
+// ---- helpers for the cases generated from route security metadata ----
+type GeneratedRoute = {
+  key: string;
+  method: RouteMethod;
+  template: string;
+  security: RouteSecurity;
+};
+
+function generatedRoutes(instance: NonNullable<typeof app>): GeneratedRoute[] {
+  return [...instance.routeSecurity.entries()]
+    .filter(([key]) => !key.startsWith('HEAD '))
+    .map(([key, security]) => {
+      const [method, template] = key.split(' ');
+      return { key, method: method as RouteMethod, template, security };
+    });
+}
+
+function pathParamsOf(template: string): string[] {
+  return [...template.matchAll(/:([A-Za-z]\w*)/g)].map((match) => match[1]);
+}
+
+function fillPath(template: string, values: Record<string, string>): string {
+  return template.replace(
+    /:([A-Za-z]\w*)/g,
+    (_match, name: string) => values[name] ?? randomUUID(),
+  );
+}
+
+// Valid body for routes that need one. "probe" uses a role that does not exist, so a request
+// that passes authorization still cannot create or change anything.
+function sampleBody(
+  route: GeneratedRoute,
+  mode: 'valid' | 'probe',
+): Record<string, unknown> | undefined {
+  const role = mode === 'valid' ? 'viewer' : 'synthetic-missing-role';
+  if (route.key.endsWith('/members/invitations'))
+    return { email: 'generated@example.invalid', role };
+  if (route.key.startsWith('PATCH ') && route.template.includes('/members/')) return { role };
+  if (route.template.endsWith('/rework') || route.template.endsWith('/cancel')) {
+    return { reason: 'Synthetic generated isolation check' };
+  }
+  return undefined;
+}
+
+function authorizedToken(security: RouteSecurity): string {
+  const permissions = security.permissions === 'none' ? [] : security.permissions;
+  if (permissions.includes('member.manage')) return ownerToken;
+  if (permissions.includes('case.approve') || permissions.includes('document.read_sensitive')) {
+    return approverToken;
+  }
+  if (permissions.includes('case.read')) return viewerToken;
+  throw new Error(`No synthetic caller holds permissions: ${permissions.join(', ') || 'none'}`);
+}
+
+async function workspaceSnapshot(workspaceId: string): Promise<string> {
+  const members = await adminPool.query(
+    'SELECT user_id, role_id, status FROM workspace_members WHERE workspace_id = $1 ORDER BY user_id',
+    [workspaceId],
+  );
+  const cases = await adminPool.query(
+    'SELECT id, status FROM cases WHERE workspace_id = $1 ORDER BY id',
+    [workspaceId],
+  );
+  const invitations = await adminPool.query(
+    'SELECT id, revoked_at, consumed_at FROM workspace_invitations WHERE workspace_id = $1 ORDER BY id',
+    [workspaceId],
+  );
+  return JSON.stringify({
+    members: members.rows,
+    cases: cases.rows,
+    invitations: invitations.rows,
+  });
+}
+
 describe('Phase 2.4 tenant isolation', () => {
   beforeAll(async () => {
     await runMigrations(adminPool);
@@ -238,6 +336,8 @@ describe('Phase 2.4 tenant isolation', () => {
     approverToken = await clerk.createToken(approverSubject);
     ownerToken = await clerk.createToken(ownerSubject);
     adminToken = await clerk.createToken(adminSubject);
+    guestToken = await clerk.createToken(guestSubject);
+    foreignToken = await clerk.createToken(foreignMemberSubject);
 
     await adminPool.query(
       `INSERT INTO workspaces (id, slug, name)
@@ -252,7 +352,8 @@ describe('Phase 2.4 tenant isolation', () => {
               ($3, $5, $6, 'Synthetic Tenant Approver'),
               ($7, $8, $9, 'Synthetic Tenant Owner'),
               ($10, $11, $12, 'Synthetic Foreign Tenant Member'),
-              ($13, $14, $15, 'Synthetic Tenant Admin')`,
+              ($13, $14, $15, 'Synthetic Tenant Admin'),
+              ($16, $17, $18, 'Synthetic Guest Without Permissions')`,
       [
         userId,
         authSubject,
@@ -269,6 +370,9 @@ describe('Phase 2.4 tenant isolation', () => {
         adminUserId,
         adminSubject,
         `${fixtureId}-admin@example.invalid`,
+        guestUserId,
+        guestSubject,
+        `${fixtureId}-guest@example.invalid`,
       ],
     );
     await adminPool.query(
@@ -278,7 +382,8 @@ describe('Phase 2.4 tenant isolation', () => {
               ($4, $3, 'owner', true),
               ($5, $3, 'reviewer', true),
               ($6, $7, 'owner', true),
-              ($8, $3, 'admin', true)`,
+              ($8, $3, 'admin', true),
+              ($9, $3, 'guest', false)`,
       [
         roleId,
         approverRoleId,
@@ -288,6 +393,7 @@ describe('Phase 2.4 tenant isolation', () => {
         foreignOwnerRoleId,
         workspaceIds[1],
         adminRoleId,
+        guestRoleId,
       ],
     );
     await adminPool.query(
@@ -296,7 +402,8 @@ describe('Phase 2.4 tenant isolation', () => {
               ($1, $4, $5, 'active', now()),
               ($1, $6, $7, 'active', now()),
               ($8, $9, $10, 'active', now()),
-              ($1, $11, $12, 'active', now())`,
+              ($1, $11, $12, 'active', now()),
+              ($1, $13, $14, 'active', now())`,
       [
         workspaceIds[0],
         userId,
@@ -310,6 +417,8 @@ describe('Phase 2.4 tenant isolation', () => {
         foreignOwnerRoleId,
         adminUserId,
         adminRoleId,
+        guestUserId,
+        guestRoleId,
       ],
     );
     await adminPool.query(
@@ -321,6 +430,14 @@ describe('Phase 2.4 tenant isolation', () => {
               ($1, $4, 'member.manage'),
               ($1, $5, 'member.manage')`,
       [workspaceIds[0], roleId, approverRoleId, ownerRoleId, adminRoleId],
+    );
+    await adminPool.query(
+      `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
+       VALUES ($1, $2, 'case.read'),
+              ($1, $2, 'case.approve'),
+              ($1, $2, 'document.read_sensitive'),
+              ($1, $2, 'member.manage')`,
+      [workspaceIds[1], foreignOwnerRoleId],
     );
     await adminPool.query(
       `INSERT INTO form_templates (id, workspace_id, key, name)
@@ -445,7 +562,7 @@ describe('Phase 2.4 tenant isolation', () => {
         workspaceIds,
       ]);
       await adminPool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [
-        [userId, approverUserId, ownerUserId, adminUserId, foreignMemberUserId],
+        [userId, approverUserId, ownerUserId, adminUserId, foreignMemberUserId, guestUserId],
       ]);
       await adminPool.query('DELETE FROM form_templates WHERE workspace_id = ANY($1::uuid[])', [
         workspaceIds,
@@ -1301,4 +1418,191 @@ describe('Phase 2.4 tenant isolation', () => {
     );
     expect(auditResult.rows[0]).toEqual({ count: 1, action: 'workspace.member_removed' });
   });
+
+  it('declares well-formed security metadata for every registered route', async () => {
+    assert.ok(app);
+    const routes = generatedRoutes(app);
+    const printed = readProtectedRoutes(app.printRoutes({ commonPrefix: false })).map(
+      routeCoverageKey,
+    );
+    expect(
+      routes.map((route) => route.key).filter((key) => key.split(' ')[1].startsWith('/v1')),
+    ).toEqual(expect.arrayContaining([...new Set(printed)]));
+
+    for (const route of routes) {
+      const { security } = route;
+      expect(['jwt', 'public', 'open'], `${route.key} authKind`).toContain(security.authKind);
+      expect([...security.pathParams].sort(), `${route.key} pathParams`).toEqual(
+        pathParamsOf(route.template).sort(),
+      );
+      if (security.authKind === 'jwt' && security.tenantScope === 'workspace') {
+        const requiresSomething =
+          (security.roles?.length ?? 0) > 0 || security.permissions !== 'none';
+        expect(requiresSomething, `${route.key} must declare a role or permission`).toBe(true);
+      }
+    }
+  });
+
+  it('denies, hides and never changes data for unauthenticated, wrong-permission and foreign callers on every route', async () => {
+    assert.ok(app && unauthenticatedApp);
+    const [snapshotA, snapshotB] = [
+      await workspaceSnapshot(workspaceIds[0]),
+      await workspaceSnapshot(workspaceIds[1]),
+    ];
+    const own = {
+      workspace_id: workspaceIds[0],
+      case_id: caseIds[0],
+      member_id: approverUserId,
+      invitation_id: randomUUID(),
+    };
+    const jwtRoutes = generatedRoutes(app).filter((route) => route.security.authKind === 'jwt');
+    expect(jwtRoutes.length).toBeGreaterThanOrEqual(13);
+
+    for (const route of jwtRoutes) {
+      const { method, template, security, key } = route;
+      const payload = sampleBody(route, 'valid');
+      const send = (
+        instance: NonNullable<typeof app>,
+        url: string,
+        headers: Record<string, string>,
+      ) =>
+        instance.inject({
+          method,
+          url,
+          headers: { 'idempotency-key': `synthetic-${randomUUID()}`, ...headers },
+          ...(payload ? { payload } : {}),
+        });
+
+      // 1. no token
+      const noToken = await send(unauthenticatedApp, fillPath(template, own), {});
+      expect(noToken.statusCode, `${key} without a token`).toBe(401);
+      if (security.tenantScope !== 'workspace') continue;
+
+      const ownUrl = fillPath(template, own);
+      const asGuest = {
+        authorization: `Bearer ${guestToken}`,
+        'x-workspace-id': workspaceIds[0],
+      };
+      // 2. member of A with no role/permission for this route
+      const guest = await send(app, ownUrl, asGuest);
+      expect(guest.statusCode, `${key} as a member without the declared permission`).toBe(403);
+
+      // 3. owner of workspace B that is not a member of A selects A
+      const notMember = await send(app, ownUrl, {
+        authorization: `Bearer ${foreignToken}`,
+        'x-workspace-id': workspaceIds[0],
+      });
+      expect(notMember.statusCode, `${key} as a non-member of the selected workspace`).toBe(404);
+
+      // 4. owner of B, with full rights in B, selects B but asks for A's identifiers
+      const crossTenant = await send(app, ownUrl, {
+        authorization: `Bearer ${foreignToken}`,
+        'x-workspace-id': workspaceIds[1],
+      });
+      if (security.pathParams.length > 0) {
+        expect(crossTenant.statusCode, `${key} with workspace A identifiers from workspace B`).toBe(
+          404,
+        );
+      } else {
+        // List route: it returns the caller's own workspace only, never A's rows.
+        expect(crossTenant.statusCode, `${key} list from workspace B`).toBe(200);
+      }
+      for (const response of [noToken, guest, notMember, crossTenant]) {
+        for (const id of [caseIds[0], documentIds[0], workspaceIds[0]]) {
+          // The problem document repeats the caller's own request URL in `instance`; ignore that.
+          const { instance: _instance, ...rest } = JSON.parse(response.body || '{}') as {
+            instance?: string;
+          };
+          expect(JSON.stringify(rest), `${key} must not echo workspace A data`).not.toContain(id);
+        }
+      }
+    }
+
+    expect(await workspaceSnapshot(workspaceIds[0])).toBe(snapshotA);
+    expect(await workspaceSnapshot(workspaceIds[1])).toBe(snapshotB);
+  }, 30_000);
+
+  it('lets the declared caller through (positive control) and ignores a workspace_id sent in the body', async () => {
+    assert.ok(app);
+    const [snapshotA, snapshotB] = [
+      await workspaceSnapshot(workspaceIds[0]),
+      await workspaceSnapshot(workspaceIds[1]),
+    ];
+    // Invitation routes also require a freshly synced, verified identity for the owner.
+    await adminPool.query(
+      `UPDATE users SET status = 'active', email_verified = true, email_verified_at = now(),
+              identity_source_updated_at = now(), identity_synced_at = now()
+        WHERE id = $1`,
+      [ownerUserId],
+    );
+    // Earlier tests change roles and remove members; put the two callers back first.
+    await adminPool.query(
+      `UPDATE workspace_members SET role_id = $3, status = 'active'
+        WHERE workspace_id = $1 AND user_id = $2`,
+      [workspaceIds[0], userId, roleId],
+    );
+    await adminPool.query(
+      `UPDATE workspace_members SET role_id = $3, status = 'active'
+        WHERE workspace_id = $1 AND user_id = $2`,
+      [workspaceIds[0], approverUserId, approverRoleId],
+    );
+    const jwtRoutes = generatedRoutes(app).filter(
+      (route) => route.security.authKind === 'jwt' && route.security.tenantScope === 'workspace',
+    );
+
+    for (const route of jwtRoutes) {
+      const { method, template, security, key } = route;
+      const headers = {
+        authorization: `Bearer ${authorizedToken(security)}`,
+        'x-workspace-id': workspaceIds[0],
+        'idempotency-key': `synthetic-${randomUUID()}`,
+      };
+
+      if (method === 'GET') {
+        // Real workspace-A identifiers: the declared caller must succeed.
+        const response = await app.inject({
+          method,
+          url: fillPath(template, {
+            workspace_id: workspaceIds[0],
+            case_id: caseIds[0],
+            member_id: approverUserId,
+          }),
+          headers,
+        });
+        expect(response.statusCode, `${key} as the declared caller: ${response.body}`).toBe(200);
+        continue;
+      }
+
+      // Mutating routes: random resource ids and a probe body, so nothing can change even if the
+      // request passes authorization. The point is that it is NOT answered with 401/403/5xx.
+      const url = fillPath(template, { workspace_id: workspaceIds[0] });
+      const probe = sampleBody(route, 'probe');
+      const allowed = [400, 404, 409, 422];
+      const asDeclared = await app.inject({
+        method,
+        url,
+        headers,
+        ...(probe ? { payload: probe } : {}),
+      });
+      expect(
+        allowed,
+        `${key} as the declared caller: ${asDeclared.statusCode} ${asDeclared.body}`,
+      ).toContain(asDeclared.statusCode);
+
+      // A workspace_id for workspace B in the body must be ignored or rejected, never obeyed.
+      const withForeignBody = await app.inject({
+        method,
+        url,
+        headers,
+        payload: { ...(probe ?? {}), workspace_id: workspaceIds[1], tenant_id: workspaceIds[1] },
+      });
+      expect(allowed, `${key} with a foreign workspace_id in the body`).toContain(
+        withForeignBody.statusCode,
+      );
+      expect(withForeignBody.body).not.toContain(workspaceIds[1]);
+    }
+
+    expect(await workspaceSnapshot(workspaceIds[0])).toBe(snapshotA);
+    expect(await workspaceSnapshot(workspaceIds[1])).toBe(snapshotB);
+  }, 30_000);
 });

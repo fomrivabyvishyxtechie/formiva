@@ -11,11 +11,16 @@ import {
 } from '@formiva/observability';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
+import { registerInvitationRoutes } from './routes/invitations.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
+import type { RouteSecurity } from './security-metadata.js';
 
 export async function buildApp(
   env: Record<string, string | undefined> = process.env,
-  dependencies: { pool?: Pool; auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode'> } = {},
+  dependencies: {
+    pool?: Pool;
+    auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode' | 'identityLookup'>;
+  } = {},
 ) {
   const rawEnvironment = { ...process.env, ...env };
   const config = loadConfig(rawEnvironment);
@@ -28,6 +33,7 @@ export async function buildApp(
     !rawEnvironment.CLERK_AUDIENCE && 'CLERK_AUDIENCE',
     !rawEnvironment.CLERK_JWKS_URL && 'CLERK_JWKS_URL',
     !authorizedParties?.length && 'CLERK_AUTHORIZED_PARTIES',
+    !rawEnvironment.CLERK_SECRET_KEY && 'CLERK_SECRET_KEY',
   ].filter((name): name is string => Boolean(name));
 
   if (rawEnvironment.NODE_ENV !== 'test' && missingClerkConfiguration.length > 0) {
@@ -40,6 +46,19 @@ export async function buildApp(
     trustProxy: true,
   });
 
+  // Fail closed at startup: a route without security metadata never gets registered.
+  // Must be added before any route module so it sees every route.
+  const routeSecurity = new Map<string, RouteSecurity>();
+  app.decorate('routeSecurity', routeSecurity);
+  app.addHook('onRoute', (routeOptions) => {
+    const security = routeOptions.config?.security;
+    const methods = [routeOptions.method].flat();
+    if (!security) {
+      throw new Error(`Route ${methods.join(',')} ${routeOptions.url} lacks security metadata.`);
+    }
+    for (const method of methods) routeSecurity.set(`${method} ${routeOptions.url}`, security);
+  });
+
   app.register(authPlugin, {
     pool: dependencies.pool,
     issuer: rawEnvironment.CLERK_ISSUER,
@@ -48,11 +67,13 @@ export async function buildApp(
     authorizedParties,
     jwksFetch: dependencies.auth?.jwksFetch,
     testMode,
+    identityLookup: dependencies.auth?.identityLookup,
   });
 
   if (dependencies.pool) {
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
+    await registerInvitationRoutes(app, dependencies.pool);
   }
 
   app.addHook('onRequest', async (request, reply) => {
@@ -124,30 +145,38 @@ export async function buildApp(
     reply.code(statusCode).type('application/problem+json').send(problem);
   });
 
-  app.get('/healthz', async (request, reply) => {
-    const requestId = getOrCreateRequestId(
-      request.headers as Record<string, string | string[] | undefined>,
-    );
-    const correlationId = getOrCreateCorrelationId(
-      request.headers as Record<string, string | string[] | undefined>,
-    );
+  app.get(
+    '/healthz',
+    {
+      config: {
+        security: { authKind: 'open', permissions: 'none', tenantScope: 'none', pathParams: [] },
+      },
+    },
+    async (request, reply) => {
+      const requestId = getOrCreateRequestId(
+        request.headers as Record<string, string | string[] | undefined>,
+      );
+      const correlationId = getOrCreateCorrelationId(
+        request.headers as Record<string, string | string[] | undefined>,
+      );
 
-    const payload = {
-      status: 'ok' as const,
-      service: config.API_NAME,
-      version: '0.1.0',
-      timestamp: new Date().toISOString(),
-      uptimeMs: Math.round(process.uptime() * 1000),
-      environment: config.NODE_ENV,
-      requestId,
-      correlationId,
-    };
+      const payload = {
+        status: 'ok' as const,
+        service: config.API_NAME,
+        version: '0.1.0',
+        timestamp: new Date().toISOString(),
+        uptimeMs: Math.round(process.uptime() * 1000),
+        environment: config.NODE_ENV,
+        requestId,
+        correlationId,
+      };
 
-    reply.header('x-request-id', requestId);
-    reply.header('x-correlation-id', correlationId);
+      reply.header('x-request-id', requestId);
+      reply.header('x-correlation-id', correlationId);
 
-    return payload;
-  });
+      return payload;
+    },
+  );
 
   return app;
 }

@@ -1,20 +1,22 @@
-# Phase 2.4 Tenant-Isolation Verification Evidence
+# Phase 2 Tenant-Isolation and Bootstrap/Invitation Evidence
 
-- Date: 2026-10-06
-- Scope: currently implemented authenticated API operations and database tenant isolation
+- Date: 2026-10-09
+- Scope: authenticated API operations, pre-membership workspace bootstrap/invitation operations, and database tenant isolation
 - Database: ephemeral local PostgreSQL 16, `formiva_test` on `127.0.0.1:55432`
 - Fixtures: two synthetic workspaces, viewer/approver/owner/admin memberships, tenant-owned form/case rows, and synthetic documents/scan data
-- Result: 10 registered protected routes have authorization coverage; 12 tenant-isolation tests and the complete validation checklist passed
-- No applied migrations were modified. No OCI, production database, Clerk credential, or real personal data was used.
+- Result: 13 registered protected routes have authorization coverage; 12 tenant-isolation tests pass. The Phase 2 acceptance gate remains pending required human reviewer sign-off and complete validation.
+- Migrations 001–009 remain unchanged; later migrations are additive. No OCI, production database, live Clerk credential, or real personal data was used.
 
 ## Phase 2 scope inventory
 
 | Domain/operation | Roadmap phase | Status |
 | --- | --- | --- |
 | Database migrations, RLS, `withTenant()`, JWT/member authorization | Phase 2 | Implemented; see database and tenant checks below |
-| `POST /v1/workspaces` | Phase 2.3 | Route exists but is not operational: creators without membership fail membership resolution; existing members cannot insert a distinct workspace under `workspace_self` RLS, and `app.bootstrap_workspace` requires the new workspace as current context |
+| `POST /v1/workspaces` | Phase 2.3 | Implemented with strict pre-membership auth, trusted verified identity, atomic database bootstrap, role/policy/audit creation, and idempotency |
 | `GET /v1/workspaces/{workspace_id}/members` | Phase 2.3 | Implemented; owner/admin + `member.manage`, selected-tenant rows only |
-| `POST /v1/workspaces/{workspace_id}/members/invitations` | Phase 2.3 | Blocked pending an approved invitation lifecycle/schema: no invitation token/reference, expiry, or acceptance operation exists |
+| `POST /v1/workspaces/{workspace_id}/members/invitations` | Phase 2.3 | Implemented; owner/admin + `member.manage`, verified identity, idempotent hash-only token creation, role boundaries, and redacted audit |
+| `POST /v1/invitations/accept` | Phase 2.3 | Implemented as a pre-membership capability; verified-email binding, row lock, one-time consumption, and atomic membership/audit |
+| `DELETE /v1/invitations/{invitation_id}` | Phase 2.3 | Implemented; owner/admin + `member.manage`, admin owner-invite restriction, and atomic revocation/audit |
 | `PATCH /v1/workspaces/{workspace_id}/members/{member_id}` | Phase 2.3 | Implemented; owner/admin + `member.manage`, owner/last-owner protections, atomic audit |
 | `DELETE /v1/workspaces/{workspace_id}/members/{member_id}` | Phase 2.3 | Implemented; owner/admin + `member.manage`, owner/last-owner protections, idempotent soft removal and atomic audit |
 | Case list/detail/timeline/rework/cancel and case document metadata | Existing verified Phase 2 surface | Implemented; route-level checks are listed below |
@@ -27,13 +29,16 @@
 | Billing API | No endpoint in API Contract v1.1 | Not applicable |
 | Audit read/verify APIs | Contracted governance surface; no Phase 2 route in roadmap | Not a Phase 2 endpoint; Phase 2 still requires audit writes and hash-chain enforcement |
 
-## Implemented route coverage
+## Protected route coverage
 
-The suite reads the current Fastify route inventory and requires a matching authorization coverage entry for every registered `/v1` method/path. It injects each discovered operation without authentication and expects 401. The current inventory has 10 protected method/path entries; a future protected route fails the route-coverage comparison until explicit coverage is added.
+The suite reads the current Fastify route inventory and requires a matching authorization coverage entry for every registered `/v1` method/path. It injects each discovered operation without authentication and expects 401. The current inventory has 13 protected method/path entries; a future protected route fails the route-coverage comparison until explicit coverage is added.
 
 | Registered protected operation | No-auth result | Insufficient permission |
 | --- | --- | --- |
 | `POST /v1/workspaces` | PASS — 401 | Not applicable to this authenticated-creator operation; authorization helper denial is separately verified as 403 |
+| `POST /v1/workspaces/{workspace_id}/members/invitations` | PASS — 401 | PASS — owner/admin and `member.manage`; viewer and admin owner-role boundaries return 403 |
+| `POST /v1/invitations/accept` | PASS — 401 | Not role-gated; stale/unverified identity returns 403 and unavailable/mismatched invitation returns 404 |
+| `DELETE /v1/invitations/{invitation_id}` | PASS — 401 | PASS — owner/admin and `member.manage`; unknown/consumed/revoked invitations return 404 |
 | `GET /v1/workspaces/{workspace_id}/members` | PASS — 401 | PASS — viewer receives 403; owner/admin receive selected-workspace member metadata |
 | `PATCH /v1/workspaces/{workspace_id}/members/{member_id}` | PASS — 401 | PASS — viewer receives 403; foreign/unknown member 404; last-owner demotion 409 |
 | `DELETE /v1/workspaces/{workspace_id}/members/{member_id}` | PASS — 401 | PASS — viewer receives 403; foreign/unknown member 404; last-owner removal 409 |
@@ -54,7 +59,7 @@ The inventory below separates implemented routes from future-phase operations. N
 
 | Identifier domain | Current contract operations | Status / roadmap scope |
 | --- | --- | --- |
-| Workspace/member | Create/list/invite/change/remove | List/change/remove implemented; create and invite remain Phase 2.3 blockers due to bootstrap RLS/context mismatch and missing invitation lifecycle |
+| Workspace/member | Create/list/invite/change/remove/accept/revoke | Implemented and tested with restricted bootstrap/acceptance capabilities, workspace RLS, verified identity, hash-only token persistence, atomic audit, and safe 404 behavior |
 | Case | List/detail/timeline/rework/cancel | Implemented and tested: JWT, membership, permissions, tenant-scoped access, foreign 404s; state changes are audited/idempotent |
 | Case documents | `GET /v1/cases/{case_id}/documents` | Implemented and tested: `document.read_sensitive`, safe metadata projection, redaction, empty list, tenant isolation, unknown/foreign case 404 |
 | Document | `/v1/documents/{document_id}`, view-links, reprocess, quarantine, and uploads | Phase 3 intake/file-safety scope or later; not Phase 2 |
@@ -85,7 +90,7 @@ Foreign identifiers for unavailable operations have no live endpoint against whi
 - Cancellation's live PostgreSQL test verifies a legal `submitted` → `cancelled` transition and exactly one immutable audit record with the reason, actor, correlation ID, state pair, and key fingerprint. Same-key/same-reason replay returns the original correlation ID; changed-body key reuse returns 409. The fixture transaction rolls back after the test.
 - Tenant-isolation suite runtime: 5.85 seconds total; test body reported 4.40 seconds.
 
-## Current validation results — member-management slice
+## Previous validation results — member-management slice (2026-10-06)
 
 All commands ran on 2026-10-06 with the disposable local `DATABASE_URL` configured in the shell:
 
@@ -103,12 +108,29 @@ All commands ran on 2026-10-06 with the disposable local `DATABASE_URL` configur
 | `pnpm --filter @formiva/api run build` | PASS |
 | `git diff --check` | PASS |
 
-The repository lint and format scripts do not include the root-level `tests/security/` path; the security test was separately Prettier-checked and executed by Vitest. The API suite passed all 21 tests and the tenant-isolation suite passed all 12 tests.
+The repository lint and format scripts do not include the root-level `tests/security/` path; the security test was separately Prettier-checked and executed by Vitest. This table is the 2026-10-06 member-management baseline; current bootstrap/invitation validation follows.
+
+## Current validation results — bootstrap and invitations (2026-10-09)
+
+All commands ran sequentially in one PowerShell process with `DATABASE_URL=postgresql://formiva_test:formiva_test_only@127.0.0.1:55432/formiva_test`:
+
+| Command | Result |
+| --- | --- |
+| `pnpm install` | PASS — lockfile up to date |
+| `pnpm run format:check` | PASS |
+| `pnpm run lint` | PASS |
+| `pnpm run typecheck` | PASS |
+| `pnpm --filter @formiva/api run build` | PASS |
+| `pnpm --filter @formiva/db run test` | PASS — 105 assertion checks |
+| `pnpm --filter @formiva/api run test` | PASS — 8 files, 39 tests |
+| `pnpm exec vitest run tests/security/tenant-isolation.test.ts` | PASS — 1 file, 12 tests; inventory now covers 13 protected routes |
+| `pnpm run verify` | PASS — repository format, lint, typecheck, tests, and build |
+| `git diff --check` | PASS |
 
 ## Status and follow-up
 
-Current registered-route tenant-isolation coverage has 10 protected routes and 12 passing security tests. The SQL source-package suite passed 107 assertions plus the 12-session 10/10 claim race. The separately invoked `pnpm --filter @formiva/db run test` foundation runner reports 38 assertion checks. This reconciles the older 107/99/81 counts: 107 is the current source-package SQL suite result, while 81/99 are stale.
+All 13 currently registered protected routes are included in the auth inventory; the tenant-isolation suite passes 12 tests. The database foundation runner passes 105 assertions, including bootstrap idempotency/replay/conflict/concurrency/rollback, RLS, invitation lifecycle, verified-email mismatch, and concurrent acceptance. The full requested validation sequence passed.
 
-Phase 2 is **not complete**. Prompt 2.3 still requires workspace creation and invitations, but workspace bootstrap is incompatible with current membership resolution/RLS context and the invitation schema has no acceptance lifecycle. The required technical reviewer has not signed this evidence. These blockers require approved design decisions; do not change applied migrations or proceed to Phase 3 as a workaround.
+Phase 2 bootstrap/invitation implementation and local validation are complete, but Phase 2 acceptance remains **blocked** until human security and technical reviewers approve ADR-19 and the Phase 2 exit evidence. No Phase 3 work has started.
 
-The workspace bootstrap conflict was confirmed against the disposable database with synthetic identities: a non-member creator resolves to zero workspaces, and an existing member inserting a distinct workspace under the app role is rejected by RLS (`42501`). This confirms the blocker without changing data or migrations.
+No production database, real Clerk credentials, or real personal data were used. External invitation delivery and production token delivery remain out of scope and require a separately approved channel.
