@@ -18,9 +18,22 @@ describe('Production auth config', () => {
 
   it('does not bypass missing Clerk config in tests without explicit testMode', async () => {
     const app = await buildApp({ NODE_ENV: 'test' });
-    app.get('/v1/auth-probe', async (request) => ({
-      subject: request.authIdentity?.subject,
-    }));
+    app.get(
+      '/v1/auth-probe',
+      {
+        config: {
+          security: {
+            authKind: 'jwt',
+            permissions: 'none',
+            tenantScope: 'none',
+            pathParams: [],
+          },
+        },
+      },
+      async (request) => ({
+        subject: request.authIdentity?.subject,
+      }),
+    );
 
     const response = await app.inject({ method: 'GET', url: '/v1/auth-probe' });
 
@@ -33,9 +46,22 @@ describe('Production auth config', () => {
       { NODE_ENV: 'production', ...clerkConfiguration },
       { auth: { testMode: true } },
     );
-    app.get('/v1/auth-probe', async (request) => ({
-      subject: request.authIdentity?.subject,
-    }));
+    app.get(
+      '/v1/auth-probe',
+      {
+        config: {
+          security: {
+            authKind: 'jwt',
+            permissions: 'none',
+            tenantScope: 'none',
+            pathParams: [],
+          },
+        },
+      },
+      async (request) => ({
+        subject: request.authIdentity?.subject,
+      }),
+    );
 
     const response = await app.inject({ method: 'GET', url: '/v1/auth-probe' });
 

@@ -37,6 +37,9 @@ Open risks:
   4. ADR-19 security/technical approvals pending; verified-email trust path needs independent re-review.
   5. (Resolved) API could not start with `pnpm dev` (ESM importing CJS @formiva/db); fixed with explicit named exports in packages/db/src/index.ts; `pnpm --filter @formiva/api run smoke` starts the real server.
   6. Permission-cache expiry for removed/suspended members is not tested with a clock.
+  7. Prompt 2.4 wording differs between the Roadmap and the Coding Plan; the stricter Coding Plan wording (route security metadata plus generated cross-tenant tests, foreign ids in path/query/body, lower-role caller) is now met by `config.security` metadata and the generated tests in tests/security/tenant-isolation.test.ts. Reviewer to confirm which wording governs.
+  8. The API contract is handwritten, not generated from OpenAPI. tests/security/openapi-drift.test.ts only reports live routes missing from it and never fails the build.
+  9. Route security metadata is declarative and verified by tests; it is not enforced per request. Handlers still call withTenant / withAuthorizedTenant themselves, and the startup hook only refuses routes that have no metadata.
 Decision: RESTRICTED
 If restricted, allowed use: synthetic-data development and demos only; no customer data; no Phase 3 until reviewer signs.
 Next action and owner: Technical reviewer reads auth/RLS code and ADR-19, signs this record or lists required changes - reviewer; founder commits the work.

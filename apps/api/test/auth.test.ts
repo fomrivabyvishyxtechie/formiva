@@ -153,20 +153,46 @@ describe('Fastify auth and workspace authorization', () => {
       },
       { pool: authPool, auth: { jwksFetch } },
     );
-    app.get('/v1/private', async (request) =>
-      request.withTenant!(
-        { roles: ['viewer'], permissions: ['case.read'] },
-        async (client, context) => {
-          const result = await client.query<{ workspace_id: string; user_id: string }>(
-            `SELECT current_setting('app.workspace_id', true) AS workspace_id,
-                  current_setting('app.user_id', true) AS user_id`,
-          );
-          return { ...context, context: result.rows[0] };
+    app.get(
+      '/v1/private',
+      {
+        config: {
+          security: {
+            authKind: 'jwt',
+            roles: ['viewer'],
+            permissions: ['case.read'],
+            tenantScope: 'workspace',
+            pathParams: [],
+          },
         },
-      ),
+      },
+      async (request) =>
+        request.withTenant!(
+          { roles: ['viewer'], permissions: ['case.read'] },
+          async (client, context) => {
+            const result = await client.query<{ workspace_id: string; user_id: string }>(
+              `SELECT current_setting('app.workspace_id', true) AS workspace_id,
+                  current_setting('app.user_id', true) AS user_id`,
+            );
+            return { ...context, context: result.rows[0] };
+          },
+        ),
     );
-    app.get('/v1/owner', async (request) =>
-      request.withTenant!({ roles: ['owner'] }, async () => ({ authorized: true })),
+    app.get(
+      '/v1/owner',
+      {
+        config: {
+          security: {
+            authKind: 'jwt',
+            roles: ['owner'],
+            permissions: 'none',
+            tenantScope: 'workspace',
+            pathParams: [],
+          },
+        },
+      },
+      async (request) =>
+        request.withTenant!({ roles: ['owner'] }, async () => ({ authorized: true })),
     );
     await app.ready();
   }, 60_000);
