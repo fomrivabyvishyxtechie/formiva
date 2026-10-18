@@ -75,4 +75,4 @@ pnpm run verify                                       # format, lint, typecheck,
 
 ## Sign-off
 
-Reviewer name: Sreehari T P  Date: 18/10/2026  Result: PASS
+Reviewer name: ______________  Date: ____________  Result: PASS / FAIL / RESTRICTED  (UNSIGNED)
