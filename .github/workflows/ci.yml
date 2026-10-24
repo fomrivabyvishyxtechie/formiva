@@ -71,6 +71,12 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Install Playwright Chromium
+        run: pnpm --filter @formiva/web exec playwright install --with-deps chromium
+
+      - name: Web end-to-end and accessibility tests
+        run: pnpm --filter @formiva/web run e2e
+
       - name: API smoke test
         run: pnpm --filter @formiva/api run smoke
 

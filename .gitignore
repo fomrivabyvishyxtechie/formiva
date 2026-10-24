@@ -18,3 +18,10 @@ coverage/
 *TEMPtest_error.txt
 *.log
 .DS_Store
+
+# web app build and test output
+.next/
+.next-prod/
+next-env.d.ts
+test-results/
+playwright-report/
