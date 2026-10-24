@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.next/
+.next-prod/
+next-env.d.ts
+test-results/
+playwright-report/
+pnpm-lock.yaml
+*.tsbuildinfo

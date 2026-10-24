@@ -10,8 +10,8 @@
     "dev": "pnpm --filter @formiva/api dev",
     "build": "pnpm -r --if-present run build",
     "lint": "pnpm -r --if-present run lint",
-    "format": "prettier --write \"apps/**/*.ts\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
-    "format:check": "prettier --check \"apps/**/*.ts\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
+    "format": "prettier --write \"apps/**/*.ts\" \"apps/**/*.tsx\" \"apps/**/*.mjs\" \"apps/**/*.css\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
+    "format:check": "prettier --check \"apps/**/*.ts\" \"apps/**/*.tsx\" \"apps/**/*.mjs\" \"apps/**/*.css\" \"packages/**/*.ts\" \"apps/**/*.json\" \"packages/**/*.json\" \"eslint.config.mjs\" \".prettierrc.json\" \"tsconfig.base.json\" \"pnpm-workspace.yaml\"",
     "test": "pnpm -r --if-present run test",
     "typecheck": "pnpm -r --if-present run typecheck",
     "verify": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
