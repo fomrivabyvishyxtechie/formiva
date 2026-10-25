@@ -15,6 +15,7 @@ import {
   loadDraft,
   optionsOf,
   saveDraft,
+  serverSavable,
   slotError,
   visibleKeys,
   type Field,
@@ -23,8 +24,22 @@ import {
   type Values,
 } from '../lib/form-logic';
 
+/** When set, answers are saved to the server draft (public link) instead of this browser. */
+export type ServerDraft = {
+  initialValues: Values;
+  noticeVersion: string | null;
+  consentRecorded: boolean;
+  onSave: (values: Values, sendConsent: boolean) => Promise<{ ok: boolean; message?: string }>;
+};
+
 /** Outer component has NO hooks: it only decides whether the definition is usable. */
-export function FormRenderer({ definition }: { definition: unknown }) {
+export function FormRenderer({
+  definition,
+  server,
+}: {
+  definition: unknown;
+  server?: ServerDraft;
+}) {
   const parsed = formDefinitionSchema.safeParse(definition);
   const check = validateFormDefinition(definition);
   if (!parsed.success || !check.valid) {
@@ -35,13 +50,17 @@ export function FormRenderer({ definition }: { definition: unknown }) {
       </div>
     );
   }
-  return <ValidForm def={parsed.data} />;
+  return <ValidForm def={parsed.data} server={server} />;
 }
 
 type Problem = { id: string; label: string; message: string };
 
-function ValidForm({ def }: { def: FormDefinition }) {
-  const [values, setValues] = useState<Values>({});
+function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft }) {
+  const [values, setValues] = useState<Values>(server?.initialValues ?? {});
+  const [consent, setConsent] = useState(false);
+  const [consentDone, setConsentDone] = useState(server?.consentRecorded ?? false);
+  const [saving, setSaving] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [files, setFiles] = useState<Record<string, FileInfo | undefined>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [attempts, setAttempts] = useState(0);
@@ -53,6 +72,10 @@ function ValidForm({ def }: { def: FormDefinition }) {
   // Work out the schema hash, then restore any saved (non-sensitive) answers.
   useEffect(() => {
     let live = true;
+    if (server) {
+      setLoaded(true); // the server holds the draft; the browser keeps nothing
+      return;
+    }
     computeSchemaHash(def).then((h) => {
       if (!live) return;
       setHash(h);
@@ -62,7 +85,7 @@ function ValidForm({ def }: { def: FormDefinition }) {
     return () => {
       live = false;
     };
-  }, [def]);
+  }, [def, server]);
 
   // Save after every change, but only once the saved draft has been loaded (otherwise it would be wiped).
   useEffect(() => {
@@ -70,7 +93,12 @@ function ValidForm({ def }: { def: FormDefinition }) {
   }, [loaded, hash, def.fields, values]);
 
   const shown = visibleKeys(def.fields, values);
-  const visibleFields = def.fields.filter((f) => shown.has(f.field_key));
+  const visibleFields = def.fields.filter(
+    (f) => shown.has(f.field_key) && (!server || serverSavable(f)),
+  );
+  const withheld = server
+    ? def.fields.some((f) => shown.has(f.field_key) && !serverSavable(f)) || def.slots.length > 0
+    : false;
 
   const problems: Problem[] = [];
   const errorFor: Record<string, string> = {};
@@ -84,7 +112,7 @@ function ValidForm({ def }: { def: FormDefinition }) {
       problems.push({ id: `f-${f.field_key}`, label: f.label, message: msg });
     }
   }
-  for (const s of def.slots) {
+  for (const s of server ? [] : def.slots) {
     const msg = slotError(s, files[`s-${s.key}`]);
     if (msg) {
       errorFor[`s-${s.key}`] = msg;
@@ -104,8 +132,31 @@ function ValidForm({ def }: { def: FormDefinition }) {
     setValues((prev) => ({ ...prev, [key]: v }));
   };
 
+  async function saveToServer() {
+    if (!server) return;
+    if (!consentDone && !consent) {
+      setSaveMessage('Tick the privacy notice box before saving.');
+      document.getElementById('consent')?.focus();
+      return;
+    }
+    setSaving(true);
+    setSaveMessage(null);
+    const result = await server.onSave(values, !consentDone);
+    setSaving(false);
+    if (result.ok) {
+      setConsentDone(true);
+      setSaveMessage('Draft saved.');
+    } else {
+      setSaveMessage(result.message ?? 'Could not save. Try again.');
+    }
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
+    if (server) {
+      void saveToServer();
+      return;
+    }
     setAttempts((n) => n + 1);
     setReady(problems.length === 0);
   }
@@ -135,10 +186,39 @@ function ValidForm({ def }: { def: FormDefinition }) {
 
   return (
     <form noValidate onSubmit={onSubmit} aria-label="Employee details">
-      <p className="note">
-        Your answers are saved on this device as you type, except sensitive answers and files.
-        Nothing is sent anywhere in this demo.
-      </p>
+      {server ? (
+        <p className="note">
+          Your answers are saved to your private draft when you press Save draft. You can come back
+          to this link to continue.
+        </p>
+      ) : (
+        <p className="note">
+          Your answers are saved on this device as you type, except sensitive answers and files.
+          Nothing is sent anywhere in this demo.
+        </p>
+      )}
+      {server && withheld && (
+        <p className="note" id="withheld-note">
+          File uploads and some protected fields cannot be answered yet. They are not shown here.
+        </p>
+      )}
+      {server && !consentDone && (
+        <div className="field">
+          <label className="checkbox-label" htmlFor="consent">
+            <input
+              id="consent"
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
+            <span>
+              I have read the privacy notice
+              {server.noticeVersion ? ` (version ${server.noticeVersion})` : ''} and agree that my
+              answers are stored to process this form.
+            </span>
+          </label>
+        </div>
+      )}
 
       {attempts > 0 && problems.length > 0 && (
         <div
@@ -183,7 +263,7 @@ function ValidForm({ def }: { def: FormDefinition }) {
         />
       ))}
 
-      {def.slots.map((s) => (
+      {(server ? [] : def.slots).map((s) => (
         <SlotControl
           key={s.key}
           slot={s}
@@ -195,15 +275,17 @@ function ValidForm({ def }: { def: FormDefinition }) {
       ))}
 
       <p>
-        <button type="submit" id="submit-btn">
-          Continue
+        <button type="submit" id="submit-btn" disabled={saving}>
+          {server ? (saving ? 'Saving…' : 'Save draft') : 'Continue'}
         </button>
-        <button type="button" id="clear-btn" onClick={onClear}>
-          Clear saved answers
-        </button>
+        {!server && (
+          <button type="button" id="clear-btn" onClick={onClear}>
+            Clear saved answers
+          </button>
+        )}
       </p>
       <p role="status" id="form-status">
-        {ready ? 'Ready to submit (demo). Nothing was sent.' : ''}
+        {server ? (saveMessage ?? '') : ready ? 'Ready to submit (demo). Nothing was sent.' : ''}
       </p>
     </form>
   );

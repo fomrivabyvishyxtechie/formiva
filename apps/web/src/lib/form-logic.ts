@@ -171,3 +171,46 @@ export function getStore(): Store | undefined {
     return undefined;
   }
 }
+
+// ---------- server drafts (Prompt 3.2b) ----------
+export type ApiValue = string | number | boolean | string[];
+
+/** What the draft API accepts today: no files, signatures or highly sensitive answers (3.3 and 3.5 add those). */
+export function serverSavable(field: Field): boolean {
+  return (
+    field.sensitivity !== 'highly_sensitive' &&
+    field.field_type !== 'file' &&
+    field.field_type !== 'signature'
+  );
+}
+
+/** Visible, savable, non-empty answers in the shape the API expects (numbers as numbers). */
+export function toApiValues(fields: Field[], values: Values): Record<string, ApiValue> {
+  const shown = visibleKeys(fields, values);
+  const out: Record<string, ApiValue> = {};
+  for (const f of fields) {
+    if (!shown.has(f.field_key) || !serverSavable(f)) continue;
+    const v = values[f.field_key];
+    if (v === undefined || v === '' || (Array.isArray(v) && v.length === 0)) continue;
+    if (f.field_type === 'number') {
+      const n = Number(v);
+      if (Number.isFinite(n)) out[f.field_key] = n;
+      continue;
+    }
+    out[f.field_key] = v;
+  }
+  return out;
+}
+
+/** Saved answers from the API back into form state (numbers become text for the input). */
+export function fromApiValues(fields: Field[], raw: Record<string, unknown>): Values {
+  const out: Values = {};
+  for (const f of fields) {
+    if (!serverSavable(f)) continue;
+    const v = raw[f.field_key];
+    if (typeof v === 'string' || typeof v === 'boolean') out[f.field_key] = v;
+    else if (typeof v === 'number') out[f.field_key] = String(v);
+    else if (Array.isArray(v) && v.every((x) => typeof x === 'string')) out[f.field_key] = v;
+  }
+  return out;
+}
