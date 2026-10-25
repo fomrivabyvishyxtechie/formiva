@@ -4,6 +4,8 @@ export const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+  // HMAC key for hashing respondent IPs into consent evidence. Unset = IPs are not recorded.
+  IP_HASH_SECRET: z.string().min(32).optional(),
   API_NAME: z.string().min(1).default('formiva-api'),
 });
 

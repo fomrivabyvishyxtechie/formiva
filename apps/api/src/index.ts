@@ -12,6 +12,8 @@ import {
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
 import { registerInvitationRoutes } from './routes/invitations.js';
+import { registerPublicRoutes } from './routes/public.js';
+import { logSerializers, redactUrl } from './log-redaction.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 import type { RouteSecurity } from './security-metadata.js';
 
@@ -41,7 +43,7 @@ export async function buildApp(
   }
 
   const app = Fastify({
-    logger: config.NODE_ENV !== 'test',
+    logger: config.NODE_ENV !== 'test' ? { serializers: logSerializers } : false,
     requestIdHeader: 'x-request-id',
     trustProxy: true,
   });
@@ -74,6 +76,7 @@ export async function buildApp(
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
     await registerInvitationRoutes(app, dependencies.pool);
+    await registerPublicRoutes(app, dependencies.pool, { ipHashSecret: config.IP_HASH_SECRET });
   }
 
   app.addHook('onRequest', async (request, reply) => {
@@ -109,6 +112,9 @@ export async function buildApp(
       403: 'Forbidden',
       404: 'Resource not found',
       409: 'Conflict',
+      422: 'Unprocessable request',
+      429: 'Too many requests',
+      501: 'Not implemented',
       503: 'Service unavailable',
     };
     const problemTypes: Record<number, string> = {
@@ -117,6 +123,9 @@ export async function buildApp(
       403: 'forbidden',
       404: 'not-found',
       409: 'conflict',
+      422: 'unprocessable',
+      429: 'rate-limited',
+      501: 'not-implemented',
       503: 'service-unavailable',
     };
     if (statusCode === 401) reply.header('www-authenticate', 'Bearer');
@@ -129,7 +138,7 @@ export async function buildApp(
         statusCode === 500
           ? 'An unexpected error occurred.'
           : (fastifyError.publicMessage ?? String(serialized.message)),
-      instance: request.raw.url,
+      instance: redactUrl(request.raw.url),
       correlation_id: correlationId,
       errors: [
         {

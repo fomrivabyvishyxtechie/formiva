@@ -157,6 +157,8 @@ Roles are `owner`, `admin`, `reviewer`, `approver`, `integration_operator`, `aud
 
 # 5. Public respondent API
 
+> **Implementation note (Prompt 3.2, ADR-22 PROPOSED).** Tokens are opaque 64-hex strings (hash-only storage), not signed. Field objects use the 3.1a shape (`field_key`, `field_type`, `slots`); the examples below show the older shape. `GET` returns `form` (id, version_id, slug, name, status, privacy_notice_version, fields, slots) and `draft` (case_id or null, status, draft_revision, consent_recorded, non-sensitive values). `PUT` errors: `404` bad link, `409` stale `draft_revision` or case no longer draft, `422` consent missing / values invalid, `429` rate limit. `upload-requests` and `submit` return `501` until Prompts 3.3 and 3.4.
+
 Public routes use a hashed, signed respondent token scoped to a published form/version. They use no Clerk login.
 
 ## 5.1 `GET /public/v1/forms/{respondent_token}`

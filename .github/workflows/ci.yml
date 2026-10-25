@@ -66,7 +66,7 @@ jobs:
         run: pnpm run test
 
       - name: Tenant isolation and security tests
-        run: pnpm exec vitest run tests/security
+        run: pnpm exec vitest run tests/security --no-file-parallelism
 
       - name: Build
         run: pnpm run build
