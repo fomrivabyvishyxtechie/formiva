@@ -187,6 +187,8 @@ Response includes `case_id`, new `draft_revision`, `status`, `saved_at`, and `co
 
 ## 5.3 `POST /public/v1/forms/{respondent_token}/upload-requests`
 
+> **Implementation note (Prompt 3.3a, ADR-24 PROPOSED).** Needs a saved draft with recorded consent (`409 draft_required`, `422 consent_required`). Allowed: PDF, PNG, JPEG, DOCX; extension, `mime_type` and slot must agree (`422 invalid_file`, `422 unknown_slot`, `422 too_many_files`). A replayed `idempotency_key` returns `200` with the same document; a changed request is `409 idempotency_conflict`. Success is `201` with `upload_id`, `document_id`, `method`, `url`, `headers` (send exactly these), `expires_at`, `status: quarantine_pending`, `correlation_id`. `503 uploads_unavailable` when storage is not configured.
+
 Creates a short-lived exact presigned upload to quarantine. Idempotency is required.
 
 ```json

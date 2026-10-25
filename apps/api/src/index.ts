@@ -13,6 +13,7 @@ import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
 import { registerInvitationRoutes } from './routes/invitations.js';
 import { registerPublicRoutes } from './routes/public.js';
+import { createS3ObjectStore, type ObjectStore } from './services/object-store.js';
 import { logSerializers, redactUrl } from './log-redaction.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 import type { RouteSecurity } from './security-metadata.js';
@@ -21,6 +22,7 @@ export async function buildApp(
   env: Record<string, string | undefined> = process.env,
   dependencies: {
     pool?: Pool;
+    objectStore?: ObjectStore;
     auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode' | 'identityLookup'>;
   } = {},
 ) {
@@ -76,7 +78,20 @@ export async function buildApp(
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
     await registerInvitationRoutes(app, dependencies.pool);
-    await registerPublicRoutes(app, dependencies.pool, { ipHashSecret: config.IP_HASH_SECRET });
+    const objectStore =
+      dependencies.objectStore ??
+      (config.R2_ACCOUNT_ID && config.R2_ACCESS_KEY_ID && config.R2_SECRET_ACCESS_KEY
+        ? createS3ObjectStore({
+            accountId: config.R2_ACCOUNT_ID,
+            accessKeyId: config.R2_ACCESS_KEY_ID,
+            secretAccessKey: config.R2_SECRET_ACCESS_KEY,
+          })
+        : undefined);
+    await registerPublicRoutes(app, dependencies.pool, {
+      ipHashSecret: config.IP_HASH_SECRET,
+      objectStore,
+      quarantineBucket: config.R2_QUARANTINE_BUCKET,
+    });
   }
 
   app.addHook('onRequest', async (request, reply) => {

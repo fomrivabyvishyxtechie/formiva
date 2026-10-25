@@ -1,23 +1,15 @@
 import { createHmac } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { Pool, PoolClient } from 'pg';
+import type { Pool } from 'pg';
 import { z } from 'zod';
-import {
-  formDefinitionSchema,
-  validateFormDefinition,
-  type FormDefinition,
-} from '@formiva/contracts';
+import type { FormDefinition } from '@formiva/contracts';
 import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
+import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
+import { registerUploadRoute } from './public-uploads.js';
+import type { ObjectStore } from '../services/object-store.js';
 import { RateLimiter } from '../rate-limiter.js';
 import { hashRespondentToken, resolveRespondentToken } from '../services/respondent-tokens.js';
-
-type HttpError = Error & { statusCode: number; publicMessage: string; code: string };
-function httpError(statusCode: number, code: string, message: string): HttpError {
-  return Object.assign(new Error(message), { statusCode, publicMessage: message, code });
-}
-// One message for every bad link, so an attacker cannot tell unknown from expired from revoked.
-const notFound = () => httpError(404, 'not_found', 'Form link not found.');
 
 const draftBody = z
   .object({
@@ -31,7 +23,6 @@ const draftBody = z
   .strict();
 
 const FULL_ID = /(?<!\d)\d{12}(?!\d)/; // Government Documents Policy: no full ID numbers in free text
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TEXT_TYPES = new Set(['text', 'textarea', 'email', 'phone', 'date', 'select']);
 
 type Field = FormDefinition['fields'][number];
@@ -95,63 +86,13 @@ function valueProblem(field: Field, value: unknown): string | null {
   return null;
 }
 
-interface PublishedForm {
-  id: string;
-  versionId: string;
-  slug: string;
-  name: string;
-  noticeVersion: string | null;
-  definition: FormDefinition;
-}
-
-async function loadPublishedForm(client: PoolClient, versionId: string): Promise<PublishedForm> {
-  const result = await client.query<{
-    template_id: string;
-    key: string;
-    name: string;
-    privacy_notice_version: string | null;
-    schema_json: unknown;
-  }>(
-    `SELECT v.template_id, t.key, t.name, v.privacy_notice_version, v.schema_json
-       FROM form_template_versions v
-       JOIN form_templates t ON t.id = v.template_id AND t.workspace_id = v.workspace_id
-      WHERE v.id = $1 AND v.status = 'published'`,
-    [versionId],
-  );
-  const row = result.rows[0];
-  if (!row) throw notFound();
-  const checked = validateFormDefinition(row.schema_json);
-  if (!checked.valid) throw notFound(); // a broken published definition is never shown or accepted
-  return {
-    id: row.template_id,
-    versionId,
-    slug: row.key,
-    name: row.name,
-    noticeVersion: row.privacy_notice_version,
-    definition: formDefinitionSchema.parse(row.schema_json), // parsed: defaults applied
-  };
-}
-
-async function auditSafe(
-  client: PoolClient,
-  action: string,
-  caseId: string,
-  payload: Record<string, unknown>,
-  correlationId: string,
-) {
-  await client.query(`SELECT app.audit($1, 'case', $2, NULL, $3::jsonb, 'system', NULL, $4)`, [
-    action,
-    caseId,
-    JSON.stringify(payload),
-    UUID.test(correlationId) ? correlationId : null,
-  ]);
-}
-
 export interface PublicRouteOptions {
   /** HMAC key for consent_records.ip_hash. Without it the IP is not recorded at all. */
   ipHashSecret?: string;
   ipLimiter?: RateLimiter;
   tokenLimiter?: RateLimiter;
+  objectStore?: ObjectStore;
+  quarantineBucket?: string;
 }
 
 export async function registerPublicRoutes(
@@ -412,11 +353,16 @@ export async function registerPublicRoutes(
     },
   );
 
-  // Later prompts (3.3 uploads, 3.4 atomic submit). Registered now so the routes, limits and metadata exist.
-  for (const [path, phase] of [
-    ['upload-requests', '3.3'],
-    ['submit', '3.4'],
-  ] as const) {
+  registerUploadRoute(app, {
+    pool,
+    store: options.objectStore,
+    quarantineBucket: options.quarantineBucket,
+    security,
+    guard,
+  });
+
+  // Later prompt (3.4 atomic submit). Registered now so the routes, limits and metadata exist.
+  for (const [path, phase] of [['submit', '3.4']] as const) {
     app.post(
       `/public/v1/forms/:respondent_token/${path}`,
       { config: { security } },

@@ -256,10 +256,11 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
           field={f}
           value={values[f.field_key]}
           error={showError(`f-${f.field_key}`)}
-          describedBy={describe(`f-${f.field_key}`, !isDraftable(f))}
+          describedBy={describe(`f-${f.field_key}`, !server && !isDraftable(f))}
           onValue={(v) => setValue(f.field_key, v)}
           onBlur={() => touch(`f-${f.field_key}`)}
           onFile={(e) => onFile(`f-${f.field_key}`, e)}
+          onServer={Boolean(server)}
         />
       ))}
 
@@ -299,9 +300,19 @@ type FieldProps = {
   onValue: (v: Values[string]) => void;
   onBlur: () => void;
   onFile: (e: ChangeEvent<HTMLInputElement>) => void;
+  onServer: boolean;
 };
 
-function FieldControl({ field, value, error, describedBy, onValue, onBlur, onFile }: FieldProps) {
+function FieldControl({
+  field,
+  value,
+  error,
+  describedBy,
+  onValue,
+  onBlur,
+  onFile,
+  onServer,
+}: FieldProps) {
   const id = `f-${field.field_key}`;
   const common = {
     id,
@@ -360,7 +371,7 @@ function FieldControl({ field, value, error, describedBy, onValue, onBlur, onFil
             />
             <span>{label}</span>
           </label>
-          <FieldNotes id={id} field={field} error={error} />
+          <FieldNotes id={id} field={field} error={error} onServer={onServer} />
         </div>
       );
     case 'file':
@@ -424,12 +435,22 @@ function FieldControl({ field, value, error, describedBy, onValue, onBlur, onFil
     <div className="field">
       <label htmlFor={id}>{label}</label>
       {control}
-      <FieldNotes id={id} field={field} error={error} />
+      <FieldNotes id={id} field={field} error={error} onServer={onServer} />
     </div>
   );
 }
 
-function FieldNotes({ id, field, error }: { id: string; field: Field; error: string | undefined }) {
+function FieldNotes({
+  id,
+  field,
+  error,
+  onServer,
+}: {
+  id: string;
+  field: Field;
+  error: string | undefined;
+  onServer: boolean;
+}) {
   return (
     <>
       {field.field_type === 'signature' && (
@@ -437,7 +458,7 @@ function FieldNotes({ id, field, error }: { id: string; field: Field; error: str
           Type your full name to sign. Not saved on this device.
         </p>
       )}
-      {field.field_type !== 'signature' && !isDraftable(field) && (
+      {!onServer && field.field_type !== 'signature' && !isDraftable(field) && (
         <p className="note" id={`${id}-hint`}>
           Not saved on this device.
         </p>
