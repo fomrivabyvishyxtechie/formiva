@@ -1,6 +1,6 @@
 # ADR-22: Public respondent API (drafts, tokens, consent)
 
-Status: PROPOSED (the founder accepts or rejects; the agent must not set ACCEPTED)
+Status: ACCEPTED (the founder accepts or rejects; the agent must not set ACCEPTED)
 Date: 2026-10-25
 Phase: 3 (Prompt 3.2)
 
