@@ -7,11 +7,13 @@ import {
   draftKey,
   fieldError,
   fileProblem,
+  fromApiValues,
   isDraftable,
   loadDraft,
   pickDraft,
   saveDraft,
   slotError,
+  toApiValues,
   visibleKeys,
 } from './form-logic';
 
@@ -134,5 +136,55 @@ describe('browser drafts', () => {
     expect(loadDraft(memoryStore('get'), 'h', def.fields)).toEqual({});
     expect(() => saveDraft(undefined, 'h', def.fields, values)).not.toThrow();
     expect(loadDraft(undefined, 'h', def.fields)).toEqual({});
+  });
+});
+
+describe('server drafts', () => {
+  const fields = formDefinitionSchema.parse({
+    fields: [
+      { field_key: 'name', label: 'Name', field_type: 'text', sensitivity: 'internal' },
+      { field_key: 'age', label: 'Age', field_type: 'number', sensitivity: 'internal' },
+      { field_key: 'agree', label: 'Agree', field_type: 'checkbox', sensitivity: 'internal' },
+      { field_key: 'note', label: 'Note', field_type: 'textarea', sensitivity: 'sensitive' },
+      { field_key: 'bank', label: 'Bank', field_type: 'text', sensitivity: 'highly_sensitive' },
+      { field_key: 'sig', label: 'Sign', field_type: 'signature', sensitivity: 'internal' },
+      { field_key: 'doc', label: 'Doc', field_type: 'file', sensitivity: 'internal' },
+      {
+        field_key: 'extra',
+        label: 'Extra',
+        field_type: 'text',
+        sensitivity: 'internal',
+        conditional: { depends_on: 'agree', equals: true },
+      },
+    ],
+    slots: [],
+  }).fields;
+
+  it('sends only visible, savable, non-empty answers, with numbers as numbers', () => {
+    const out = toApiValues(fields, {
+      name: 'Test Person',
+      age: '41',
+      agree: false,
+      note: 'kept (sensitive is stored server-side)',
+      bank: '000011112222',
+      sig: 'Test Person',
+      extra: 'hidden by condition',
+    });
+    expect(out).toEqual({
+      name: 'Test Person',
+      age: 41,
+      agree: false,
+      note: 'kept (sensitive is stored server-side)',
+    });
+  });
+
+  it('skips empty text, empty lists and non-numeric numbers', () => {
+    expect(toApiValues(fields, { name: '', age: 'abc' })).toEqual({});
+  });
+
+  it('turns saved answers back into form state and ignores unsavable fields', () => {
+    expect(fromApiValues(fields, { name: 'A', age: 41, agree: true, bank: 'x', sig: 'y' })).toEqual(
+      { name: 'A', age: '41', agree: true },
+    );
   });
 });
