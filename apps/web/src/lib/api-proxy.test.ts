@@ -71,4 +71,15 @@ describe('forwardToApi', () => {
     expect(res.status).toBe(413);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('forwards a submit to the submit path', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 202 }));
+    const res = await forwardToApi(
+      new Request('http://web/x', { method: 'POST', body: '{"a":1}' }),
+      TOKEN,
+      '/submit',
+    );
+    expect(res.status).toBe(202);
+    expect(fetchMock.mock.calls[0]![0]).toBe(`http://api.test/public/v1/forms/${TOKEN}/submit`);
+  });
 });

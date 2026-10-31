@@ -30,6 +30,8 @@ export type ServerDraft = {
   noticeVersion: string | null;
   consentRecorded: boolean;
   onSave: (values: Values, sendConsent: boolean) => Promise<{ ok: boolean; message?: string }>;
+  /** Final submit. The answers have just been saved; on success the page replaces the form. */
+  onSubmit: () => Promise<{ ok: boolean; message?: string }>;
 };
 
 /** Outer component has NO hooks: it only decides whether the definition is usable. */
@@ -132,12 +134,12 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
     setValues((prev) => ({ ...prev, [key]: v }));
   };
 
-  async function saveToServer() {
-    if (!server) return;
+  async function saveToServer(): Promise<boolean> {
+    if (!server) return false;
     if (!consentDone && !consent) {
       setSaveMessage('Tick the privacy notice box before saving.');
       document.getElementById('consent')?.focus();
-      return;
+      return false;
     }
     setSaving(true);
     setSaveMessage(null);
@@ -149,6 +151,23 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
     } else {
       setSaveMessage(result.message ?? 'Could not save. Try again.');
     }
+    return result.ok;
+  }
+
+  // Check, save the latest answers, then submit. Any step that fails stops here with a message.
+  async function submitToServer() {
+    if (!server) return;
+    setAttempts((n) => n + 1);
+    if (problems.length > 0) {
+      setSaveMessage('Fix the answers listed above, then submit.');
+      return;
+    }
+    if (!(await saveToServer())) return;
+    setSaving(true);
+    setSaveMessage('Submitting…');
+    const result = await server.onSubmit();
+    setSaving(false);
+    if (!result.ok) setSaveMessage(result.message ?? 'Could not submit. Try again.');
   }
 
   function onSubmit(e: FormEvent) {
@@ -275,10 +294,17 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
         />
       ))}
 
-      <p>
+      {/* Pressing a button must not move focus out of a field: the field's error line would then
+          push the buttons down mid-click and the click would be lost. */}
+      <p onMouseDown={(e) => e.preventDefault()}>
         <button type="submit" id="submit-btn" disabled={saving}>
           {server ? (saving ? 'Saving…' : 'Save draft') : 'Continue'}
         </button>
+        {server && (
+          <button type="button" id="final-submit-btn" disabled={saving} onClick={submitToServer}>
+            Submit form
+          </button>
+        )}
         {!server && (
           <button type="button" id="clear-btn" onClick={onClear}>
             Clear saved answers

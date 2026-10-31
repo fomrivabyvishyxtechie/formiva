@@ -158,3 +158,107 @@ test('explains a stale draft (409) and an invalid link (404) without technical d
   await other.goto(URL);
   await expect(other.locator('.summary')).toContainText('not valid or has expired');
 });
+
+const saved = { ...form.draft, case_id: 'c', consent_recorded: true, draft_revision: 1 };
+const withDraft = { ...form, draft: saved };
+const SUBMIT = `**/api/public/forms/${TOKEN}/submit`;
+
+async function mockPut(page: Page) {
+  await page.route(`**/api/public/forms/${TOKEN}/draft`, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ case_id: 'c', draft_revision: 2, status: 'draft', saved_at: 'now' }),
+    }),
+  );
+}
+
+test('submits: saves first, sends the revision and a key, then shows the confirmation (axe clean)', async ({
+  page,
+}) => {
+  await mockGet(page, withDraft);
+  await mockPut(page);
+  const bodies: Array<{ draft_revision: number; idempotency_key: string }> = [];
+  await page.route(SUBMIT, async (route) => {
+    bodies.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      contentType: 'application/json',
+      body: JSON.stringify({ case_id: 'c', status: 'submitted', job_ids: [], replay: false }),
+    });
+  });
+  await page.goto(URL);
+  await page.locator('#f-full_name').fill('Synthetic Person');
+  await page.locator('#final-submit-btn').click();
+  await expect(page.getByRole('heading', { name: 'Form submitted' })).toBeFocused();
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]!.draft_revision).toBe(2);
+  expect(bodies[0]!.idempotency_key).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  await expect(page.locator('#f-full_name')).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+});
+
+test('does not send anything while a required answer is missing', async ({ page }) => {
+  await mockGet(page, withDraft);
+  let calls = 0;
+  await page.route(`**/api/public/forms/${TOKEN}/(draft|submit)`, async (route) => {
+    calls++;
+    await route.abort();
+  });
+  await page.goto(URL);
+  await page.locator('#final-submit-btn').click();
+  await expect(page.locator('.summary')).toContainText('Full name');
+  expect(calls).toBe(0);
+});
+
+test('explains a missing required file, and a retry after a failure reuses the same key', async ({
+  page,
+}) => {
+  await mockGet(page, withDraft);
+  await mockPut(page);
+  const keys: string[] = [];
+  let n = 0;
+  await page.route(SUBMIT, async (route) => {
+    keys.push(route.request().postDataJSON().idempotency_key);
+    n++;
+    if (n === 1) {
+      await route.fulfill({
+        status: 422,
+        contentType: 'application/problem+json',
+        body: JSON.stringify({
+          errors: [{ code: 'incomplete', message: 'Missing required answers: photo.' }],
+        }),
+      });
+    } else {
+      await route.fulfill({ status: 202, contentType: 'application/json', body: '{}' });
+    }
+  });
+  await page.goto(URL);
+  await page.locator('#f-full_name').fill('Synthetic Person');
+  await page.locator('#final-submit-btn').click();
+  await expect(page.locator('#form-status')).toContainText('Photo');
+  await page.locator('#final-submit-btn').click();
+  await expect(page.getByRole('heading', { name: 'Form submitted' })).toBeVisible();
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBe(keys[1]);
+});
+
+test('an already submitted link shows the confirmation, not the form', async ({ page }) => {
+  await mockGet(page, { ...form, draft: { ...saved, status: 'submitted' } });
+  await page.goto(URL);
+  await expect(page.getByRole('heading', { name: 'Form submitted' })).toBeVisible();
+  await expect(page.locator('#f-full_name')).toHaveCount(0);
+});
+
+test('a click on Submit still works after emptying a required field (the error line must not move the button)', async ({
+  page,
+}) => {
+  await mockGet(page, withDraft);
+  await page.route(`**/api/public/forms/${TOKEN}/(draft|submit)`, (route) => route.abort());
+  await page.goto(URL);
+  await page.locator('#f-full_name').fill('Synthetic Person');
+  await page.locator('#f-full_name').fill('');
+  await page.locator('#final-submit-btn').click();
+  await expect(page.locator('.summary')).toContainText('Full name');
+  await expect(page.locator('#form-status')).toContainText('Fix the answers');
+});
