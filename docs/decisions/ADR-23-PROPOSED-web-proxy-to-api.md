@@ -1,6 +1,6 @@
 # ADR-23: The web app proxies public form calls to the API
 
-Status: PROPOSED (the founder accepts or rejects; the agent must not set ACCEPTED)
+Status: Accepted (the founder accepts or rejects; the agent must not set ACCEPTED)
 Date: 2026-10-25
 Phase: 3 (Prompt 3.2b)
 
