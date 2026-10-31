@@ -6,6 +6,7 @@ import type { FormDefinition } from '@formiva/contracts';
 import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
 import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
+import { registerSubmitRoute } from './public-submit.js';
 import { registerUploadRoute } from './public-uploads.js';
 import type { UploadSigner } from '../services/object-store.js';
 import { RateLimiter } from '../rate-limiter.js';
@@ -361,15 +362,5 @@ export async function registerPublicRoutes(
     guard,
   });
 
-  // Later prompt (3.4 atomic submit). Registered now so the routes, limits and metadata exist.
-  for (const [path, phase] of [['submit', '3.4']] as const) {
-    app.post(
-      `/public/v1/forms/:respondent_token/${path}`,
-      { config: { security } },
-      async (request, reply) => {
-        guard(request, reply);
-        throw httpError(501, 'not_implemented', `Not available yet (Prompt ${phase}).`);
-      },
-    );
-  }
+  registerSubmitRoute(app, { pool, security, guard });
 }

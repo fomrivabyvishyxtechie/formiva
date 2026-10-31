@@ -89,6 +89,7 @@ export {
   validateFormDefinition,
   computeSchemaHash,
   toCanonicalJSON,
+  visibleKeys,
 } from './forms.js';
 export type { FormDefinition, FormValidationError } from './forms.js';
 export {

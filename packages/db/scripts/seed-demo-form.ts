@@ -100,6 +100,12 @@ async function main(): Promise<void> {
        VALUES ($1, $2, $3, 1, 'published', $4::jsonb, decode(repeat('ab', 32), 'hex'), 'demo-notice-v1', now())`,
       [version, ws, template, JSON.stringify(definition)],
     );
+    // Submission needs an active routing policy (fail closed without one).
+    await pool.query(
+      `INSERT INTO routing_policies (workspace_id, policy_version, status, activated_at)
+       VALUES ($1, 'demo-policy-v1', 'active', now())`,
+      [ws],
+    );
     const token = randomBytes(32).toString('hex');
     await pool.query(
       `INSERT INTO respondent_tokens (workspace_id, form_version_id, purpose, token_hash, expires_at)
