@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../apps/api/src/index.js';
-import type { ObjectStore } from '../../apps/api/src/services/object-store.js';
+import type { UploadSigner } from '../../apps/api/src/services/object-store.js';
 import { issueRespondentToken } from '../../apps/api/src/services/respondent-tokens.js';
 import { runMigrations, withTenant } from '../../packages/db/src/index.js';
 
@@ -77,8 +77,8 @@ const definition = {
   ],
 };
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-const calls: Array<Parameters<ObjectStore['presignUpload']>[0]> = [];
-const fakeStore: ObjectStore = {
+const calls: Array<Parameters<UploadSigner['presignUpload']>[0]> = [];
+const fakeStore: UploadSigner = {
   async presignUpload(input) {
     calls.push(input);
     return {

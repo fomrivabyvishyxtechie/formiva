@@ -13,7 +13,7 @@ import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
 import { registerInvitationRoutes } from './routes/invitations.js';
 import { registerPublicRoutes } from './routes/public.js';
-import { createS3ObjectStore, type ObjectStore } from './services/object-store.js';
+import { createS3ObjectStore, type UploadSigner } from './services/object-store.js';
 import { logSerializers, redactUrl } from './log-redaction.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
 import type { RouteSecurity } from './security-metadata.js';
@@ -22,7 +22,7 @@ export async function buildApp(
   env: Record<string, string | undefined> = process.env,
   dependencies: {
     pool?: Pool;
-    objectStore?: ObjectStore;
+    objectStore?: UploadSigner;
     auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode' | 'identityLookup'>;
   } = {},
 ) {

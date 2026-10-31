@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
 import { resolveRespondentToken, hashRespondentToken } from '../services/respondent-tokens.js';
-import type { ObjectStore } from '../services/object-store.js';
+import type { UploadSigner } from '../services/object-store.js';
 import { MAX_DOCUMENTS_PER_CASE, checkUpload } from '../services/upload-policy.js';
 import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
 
@@ -23,7 +23,7 @@ const body = z
 
 export interface UploadRouteDeps {
   pool: Pool;
-  store?: ObjectStore;
+  store?: UploadSigner;
   quarantineBucket?: string;
   security: NonNullable<import('fastify').FastifyContextConfig['security']>;
   guard: (request: FastifyRequest, reply: { header: (k: string, v: string) => unknown }) => void;

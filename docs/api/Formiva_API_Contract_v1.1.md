@@ -197,6 +197,9 @@ Creates a short-lived exact presigned upload to quarantine. Idempotency is requi
 
 Response includes synthetic `upload_id`, `document_id`, method, short-lived URL, exact content type, expiry, and `quarantine_pending`. Do not return a permanent object key. Enforce size, extension, MIME, page, pixel, archive, decompression, and rate limits.
 
+
+> **Implementation note (Prompt 3.3b, ADR-25 PROPOSED).** After upload, a background scanner moves each document from `pending_upload` to `clean`, `quarantined` or `rejected`. There is no respondent-facing status route yet; submit (3.4) must accept only `clean` documents.
+
 ## 5.4 `POST /public/v1/forms/{respondent_token}/submit`
 
 Atomically submits a draft and creates durable jobs. Required request:
