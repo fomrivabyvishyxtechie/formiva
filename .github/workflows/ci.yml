@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     # Disposable PostgreSQL 16 for the database, API and tenant-isolation tests.
     # Throwaway test credentials only. Host port 55432 is required: the repo's test scripts refuse any other port.
@@ -124,7 +124,7 @@ jobs:
   # Reporting-only scans. They show findings in the run log but never turn the build red,
   # because they depend on third-party rule feeds. Make them blocking once findings are triaged.
   scans:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
