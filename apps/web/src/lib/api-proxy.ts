@@ -12,7 +12,7 @@ const problem = (status: number, title: string) =>
 export async function forwardToApi(
   request: Request,
   token: string,
-  suffix: '' | '/draft',
+  suffix: '' | '/draft' | '/submit',
 ): Promise<Response> {
   // A malformed link never reaches the API.
   if (!TOKEN.test(token)) return problem(404, 'Form link not found.');
