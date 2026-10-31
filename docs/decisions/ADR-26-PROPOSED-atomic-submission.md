@@ -1,6 +1,6 @@
 # ADR-26: Atomic submission (Prompt 3.4)
 
-Status: PROPOSED (the founder accepts or rejects; the agent must not set ACCEPTED)
+Status: ACCEPTED (the founder accepts or rejects; the agent must not set ACCEPTED)
 Date: 2026-10-31
 Phase: 3 (Prompt 3.4). Follows ADR-24 and ADR-25.
 
