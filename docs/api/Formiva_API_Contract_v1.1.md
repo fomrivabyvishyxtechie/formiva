@@ -210,6 +210,8 @@ Atomically submits a draft and creates durable jobs. Required request:
 
 One `withTenant()` transaction must resolve form/version; verify consent, revision, policy and clean scan; persist case/values/metadata/hashes; insert one `ai_jobs` row per document; and audit `case.submitted` before commit. Workers poll PostgreSQL after commit. Response `202` contains case ID, job IDs, status `submitted`, next action, and correlation ID. A crash leaves the complete transaction or none; identical repeat returns the original result.
 
+> **Implementation note (Prompt 3.4, ADR-26 PROPOSED).** Built body is `{draft_revision, idempotency_key}` only. `consent` and `document_ids` are not accepted: consent is verified from the draft-time record and every `clean` document of the case is submitted. Errors: 409 `revision_conflict`, 409 `documents_not_ready`, 422 `consent_required`, 422 `incomplete`, 503 `policy_unavailable`. A repeat returns the original result with `replay: true`. Reconcile the example above with ADR-26.
+
 ---
 
 # 6. Authenticated workspace, form, and case API

@@ -393,7 +393,7 @@ describe('public respondent API (3.2)', () => {
     }
   });
 
-  it('answers 501 for upload-requests and submit, and rate-limits with Retry-After', async () => {
+  it('treats an unknown link on submit like any bad link, and rate-limits with Retry-After', async () => {
     const limited = await buildApp(
       { NODE_ENV: 'test' },
       { pool: appPool as never, auth: { testMode: true } },
@@ -404,7 +404,7 @@ describe('public respondent API (3.2)', () => {
       url: `/public/v1/forms/${token}/submit`,
       payload: {},
     });
-    expect(submit.statusCode).toBe(501);
+    expect(submit.statusCode).toBe(404);
     let last = submit;
     for (let i = 0; i < 70 && last.statusCode !== 429; i++) {
       last = await limited.inject({ method: 'GET', url: `/public/v1/forms/${token}` });

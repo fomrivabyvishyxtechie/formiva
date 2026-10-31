@@ -6,29 +6,8 @@ export type Value = string | boolean | string[];
 export type Values = Record<string, Value>;
 export type FileInfo = { name: string; type: string; size: number };
 
-/** Keys of fields that are currently shown. A field whose controlling field is hidden is hidden too. */
-export function visibleKeys(fields: Field[], values: Values): Set<string> {
-  const byKey = new Map(fields.map((f) => [f.field_key, f]));
-  const memo = new Map<string, boolean>();
-  const visit = (key: string, seen: Set<string>): boolean => {
-    const cached = memo.get(key);
-    if (cached !== undefined) return cached;
-    const field = byKey.get(key);
-    let result = false;
-    if (field && !seen.has(key)) {
-      const c = field.conditional;
-      if (!c) result = true;
-      else {
-        seen.add(key);
-        result =
-          visit(c.depends_on, seen) && String(values[c.depends_on] ?? '') === String(c.equals);
-      }
-    }
-    memo.set(key, result);
-    return result;
-  };
-  return new Set(fields.filter((f) => visit(f.field_key, new Set())).map((f) => f.field_key));
-}
+export { visibleKeys } from '@formiva/contracts';
+import { visibleKeys } from '@formiva/contracts';
 
 export function isEmpty(value: Value | undefined): boolean {
   if (value === undefined) return true;

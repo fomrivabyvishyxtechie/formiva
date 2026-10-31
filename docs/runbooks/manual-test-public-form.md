@@ -52,6 +52,14 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:3000/public/v1/forms/<TOKE
 Expect `status: quarantine_pending` and a long `url`. Change `filename` to `virus.exe` and `mime_type` to `application/octet-stream`: expect a 422 "This file type is not accepted."
 The link cannot actually receive a file (fake storage settings); real storage is tested later with a real Cloudflare R2 bucket.
 
+## Submit (API only)
+A real submit needs a clean file, and a local file cannot be uploaded or scanned without real storage and ClamAV. The automated tests cover it (they mark a test file clean directly in the test database). Without a required file in your form, after step 3:
+```powershell
+$body = '{"draft_revision":1,"idempotency_key":"manual-submit-0001"}'
+Invoke-RestMethod -Method Post -Uri "http://localhost:3000/public/v1/forms/<TOKEN>/submit" -ContentType "application/json" -Body $body
+```
+The demo form has no required file, so expect `status: submitted` and an empty `job_ids`. Run it again: same `case_id`, `replay: true`. Run `pnpm --filter "@formiva/db" run db:seed-demo` again first if your link predates this change (the seed now adds a routing policy).
+
 ## Known limits
 - The API here connects as the test database owner, so this does not exercise row-level security. The automated tests do.
 - `next dev` prints each request path, which includes the link token, to the console. Production does not do this by default, but web host logs can.

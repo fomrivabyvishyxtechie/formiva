@@ -184,3 +184,31 @@ export async function computeSchemaHash(def: unknown): Promise<string> {
   );
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
+
+/** Keys of fields that are currently shown. A field whose controlling field is hidden is hidden too.
+ *  Shared by the browser and the API so both agree on which required fields apply. */
+export function visibleKeys(
+  fields: FormDefinition['fields'],
+  values: Record<string, unknown>,
+): Set<string> {
+  const byKey = new Map(fields.map((f) => [f.field_key, f]));
+  const memo = new Map<string, boolean>();
+  const visit = (key: string, seen: Set<string>): boolean => {
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    const field = byKey.get(key);
+    let result = false;
+    if (field && !seen.has(key)) {
+      const c = field.conditional;
+      if (!c) result = true;
+      else {
+        seen.add(key);
+        result =
+          visit(c.depends_on, seen) && String(values[c.depends_on] ?? '') === String(c.equals);
+      }
+    }
+    memo.set(key, result);
+    return result;
+  };
+  return new Set(fields.filter((f) => visit(f.field_key, new Set())).map((f) => f.field_key));
+}
