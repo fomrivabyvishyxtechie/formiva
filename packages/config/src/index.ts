@@ -6,6 +6,11 @@ export const environmentSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   // HMAC key for hashing respondent IPs into consent evidence. Unset = IPs are not recorded.
   IP_HASH_SECRET: z.string().min(32).optional(),
+  // Cloudflare R2 (S3-compatible). Unset = upload-requests answers 503. Never log these.
+  R2_ACCOUNT_ID: z.string().min(1).optional(),
+  R2_ACCESS_KEY_ID: z.string().min(1).optional(),
+  R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
+  R2_QUARANTINE_BUCKET: z.string().min(1).optional(),
   API_NAME: z.string().min(1).default('formiva-api'),
 });
 

@@ -9,6 +9,7 @@
     "test": "ts-node test/foundation.test.ts",
     "db:migrate": "ts-node run-migrations.ts",
     "db:reset": "ts-node scripts/reset-test-db.ts",
+    "db:seed-demo": "ts-node scripts/seed-demo-form.ts",
     "db:security-check": "ts-node scripts/run-sql.ts tests/06_security_checks.sql"
   },
   "dependencies": {
