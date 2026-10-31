@@ -1,4 +1,10 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 export interface PresignInput {
@@ -15,8 +21,17 @@ export interface PresignedUpload {
   headers: Record<string, string>;
   expiresAt: Date;
 }
-export interface ObjectStore {
+export interface UploadSigner {
   presignUpload(input: PresignInput): Promise<PresignedUpload>;
+}
+/** Everything the scanner worker needs on top of signing. */
+export interface ObjectStore extends UploadSigner {
+  /** Size of the stored object, or null when it does not exist. */
+  head(bucket: string, key: string): Promise<{ size: number } | null>;
+  /** Reads a whole object; throws when it is larger than maxBytes. */
+  get(bucket: string, key: string, maxBytes: number): Promise<Buffer>;
+  put(bucket: string, key: string, body: Buffer, contentType: string): Promise<void>;
+  delete(bucket: string, key: string): Promise<void>;
 }
 
 export interface S3Settings {
@@ -38,6 +53,29 @@ export function createS3ObjectStore(settings: S3Settings): ObjectStore {
     },
   });
   return {
+    async head(bucket, key) {
+      try {
+        const out = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+        return { size: out.ContentLength ?? 0 };
+      } catch (error) {
+        const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+        if (e.name === 'NotFound' || e.$metadata?.httpStatusCode === 404) return null;
+        throw error;
+      }
+    },
+    async get(bucket, key, maxBytes) {
+      const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      if ((out.ContentLength ?? 0) > maxBytes) throw new Error('object larger than limit');
+      return Buffer.from(await out.Body!.transformToByteArray());
+    },
+    async put(bucket, key, body, contentType) {
+      await client.send(
+        new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }),
+      );
+    },
+    async delete(bucket, key) {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    },
     async presignUpload(input) {
       const url = await getSignedUrl(
         client,

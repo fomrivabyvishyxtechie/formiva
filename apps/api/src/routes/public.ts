@@ -7,7 +7,7 @@ import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
 import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
 import { registerUploadRoute } from './public-uploads.js';
-import type { ObjectStore } from '../services/object-store.js';
+import type { UploadSigner } from '../services/object-store.js';
 import { RateLimiter } from '../rate-limiter.js';
 import { hashRespondentToken, resolveRespondentToken } from '../services/respondent-tokens.js';
 
@@ -91,7 +91,7 @@ export interface PublicRouteOptions {
   ipHashSecret?: string;
   ipLimiter?: RateLimiter;
   tokenLimiter?: RateLimiter;
-  objectStore?: ObjectStore;
+  objectStore?: UploadSigner;
   quarantineBucket?: string;
 }
 

@@ -11,6 +11,10 @@ export const environmentSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().min(1).optional(),
   R2_SECRET_ACCESS_KEY: z.string().min(1).optional(),
   R2_QUARANTINE_BUCKET: z.string().min(1).optional(),
+  R2_DOCUMENTS_BUCKET: z.string().min(1).optional(),
+  // ClamAV daemon (clamd) for the scanner worker.
+  CLAMD_HOST: z.string().min(1).default('127.0.0.1'),
+  CLAMD_PORT: z.coerce.number().int().positive().default(3310),
   API_NAME: z.string().min(1).default('formiva-api'),
 });
 
