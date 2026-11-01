@@ -354,7 +354,7 @@ describe('Government Documents Policy (3.5)', () => {
 describe('highly sensitive values are stored as ciphertext (3.5b)', () => {
   it('writes ciphertext + key id + last-four preview, and no plaintext anywhere in the row', async () => {
     const provider = staticKeyProvider({ k1: randomBytes(32) }, 'k1');
-    const SECRET = 'SYNTH-9999-8888-7777';
+    const PLAIN = 'SYNTH-9999-8888-7777';
     const token = await newToken(ws.a, versionA);
     await save(token);
     const [{ case_id: caseId }] = (
@@ -368,7 +368,7 @@ describe('highly sensitive values are stored as ciphertext (3.5b)', () => {
         caseId,
         fieldKey: 'extracted_id',
         revision: 5,
-        plaintext: SECRET,
+        plaintext: PLAIN,
         source: 'system',
       }),
     );
@@ -387,6 +387,6 @@ describe('highly sensitive values are stored as ciphertext (3.5b)', () => {
         { workspaceId: ws.a, caseId, fieldKey: 'extracted_id', revision: 5 },
         rows[0].value_ciphertext,
       ),
-    ).toBe(SECRET);
+    ).toBe(PLAIN);
   });
 });
