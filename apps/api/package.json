@@ -21,6 +21,7 @@
     "@clerk/backend": "^3.23.1",
     "@formiva/config": "workspace:*",
     "@formiva/contracts": "workspace:*",
+    "@formiva/crypto": "workspace:*",
     "@formiva/db": "workspace:^",
     "@formiva/observability": "workspace:*",
     "fastify": "^5.4.0",

@@ -63,6 +63,9 @@ importers:
       '@formiva/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@formiva/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@formiva/db':
         specifier: workspace:^
         version: link:../../packages/db
@@ -128,6 +131,8 @@ importers:
       zod:
         specifier: ^3.23.8
         version: 3.25.76
+
+  packages/crypto: {}
 
   packages/db:
     dependencies:

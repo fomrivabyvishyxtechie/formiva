@@ -680,3 +680,12 @@ tests/integration/api-contract.test.ts
 ```
 
 Create these gradually by step; do not ask an AI coding tool to create the entire application in one prompt.
+
+
+## Implementation note: Prompt 3.5 (Government Documents Policy, ADR-27 PROPOSED)
+
+- `GET /public/v1/forms/{token}`: only slots the workspace collects are returned; a slot may carry `policy {collect_mode, require_masked, purpose, retain_days}`.
+- `POST /public/v1/forms/{token}/upload-requests`: optional `masked_copy_confirmed: boolean`. New 422 codes: `document_type_not_collected`, `masked_copy_required`.
+- `GET /v1/document-policies` (case.read): `{ items: [{ doc_subtype, doc_class, government_issued, collect_mode, require_masked, store_file, retain_days, purpose, configured }] }`.
+- `PUT /v1/document-policies/{doc_subtype}` (workspace.manage): strict body `{ collect_mode, require_masked?, store_file?, retain_days?, purpose? }`. 404 for an unknown or unpermitted type, 422 for rule violations (purpose under 10 characters when collected; Aadhaar without masked copy).
+- Not in `docs/api/openapi.yaml` yet.

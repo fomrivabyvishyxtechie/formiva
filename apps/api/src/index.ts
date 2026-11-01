@@ -11,6 +11,7 @@ import {
 } from '@formiva/observability';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
+import { registerDocumentPolicyRoutes } from './routes/document-policies.js';
 import { registerInvitationRoutes } from './routes/invitations.js';
 import { registerPublicRoutes } from './routes/public.js';
 import { createS3ObjectStore, type UploadSigner } from './services/object-store.js';
@@ -77,6 +78,7 @@ export async function buildApp(
   if (dependencies.pool) {
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
+    await registerDocumentPolicyRoutes(app);
     await registerInvitationRoutes(app, dependencies.pool);
     const objectStore =
       dependencies.objectStore ??
