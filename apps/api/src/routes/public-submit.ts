@@ -1,10 +1,17 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { z } from 'zod';
-import { visibleKeys } from '@formiva/contracts';
+import { NO_AI_SUBTYPES, visibleKeys } from '@formiva/contracts';
 import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
-import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
+import {
+  auditSafe,
+  httpError,
+  loadPublishedForm,
+  loadSlotPolicies,
+  notFound,
+  slotAllowed,
+} from './public-shared.js';
 import { hashRespondentToken, resolveRespondentToken } from '../services/respondent-tokens.js';
 
 const submitBody = z
@@ -139,10 +146,11 @@ export function registerSubmitRoute(
           const docs = await client.query<{
             id: string;
             slot_key: string | null;
+            doc_subtype: string | null;
             status: string;
             sha256: Buffer | null;
           }>(
-            `SELECT id, slot_key, status, sha256 FROM case_documents
+            `SELECT id, slot_key, doc_subtype, status, sha256 FROM case_documents
               WHERE case_id = $1 AND status <> 'deleted' AND deleted_at IS NULL ORDER BY created_at, id`,
             [caseId],
           );
@@ -155,7 +163,10 @@ export function registerSubmitRoute(
             );
           }
           const clean = docs.rows.filter((d) => d.status === 'clean' && d.sha256);
+          // Only slots this workspace still collects can be required.
+          const policies = await loadSlotPolicies(client, form);
           const missingSlots = form.definition.slots
+            .filter((s) => slotAllowed(s, policies))
             .filter((s) => s.required && !clean.some((d) => d.slot_key === s.key))
             .map((s) => s.key);
           if (missingFields.length > 0 || missingSlots.length > 0) {
@@ -182,6 +193,8 @@ export function registerSubmitRoute(
           );
           const jobs: Array<{ id: string; document_id: string }> = [];
           for (const d of clean) {
+            // Special-category documents are never sent to AI extraction (ADR-14).
+            if (d.doc_subtype && NO_AI_SUBTYPES.includes(d.doc_subtype)) continue;
             const j = await client.query<{ id: string }>(
               `INSERT INTO ai_jobs (workspace_id, case_id, document_id, idempotency_key, object_sha256, policy_version, status)
                VALUES ($1, $2, $3, $4, $5, $6, 'queued') RETURNING id`,

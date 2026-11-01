@@ -131,6 +131,18 @@ const authorizationCoverage: Record<
     foreignResource: 404 | 'not-applicable';
   }
 > = {
+  'GET /v1/document-policies': {
+    missingAuth: 401,
+    insufficientRole: 'not-applicable',
+    authenticatedAccess: 'tested',
+    foreignResource: 'not-applicable',
+  },
+  'PUT /v1/document-policies/:doc_subtype': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
   'POST /v1/workspaces': {
     missingAuth: 401,
     insufficientRole: 'not-applicable',
@@ -293,7 +305,9 @@ function sampleBody(
 
 function authorizedToken(security: RouteSecurity): string {
   const permissions = security.permissions === 'none' ? [] : security.permissions;
-  if (permissions.includes('member.manage')) return ownerToken;
+  if (permissions.includes('member.manage') || permissions.includes('workspace.manage')) {
+    return ownerToken;
+  }
   if (permissions.includes('case.approve') || permissions.includes('document.read_sensitive')) {
     return approverToken;
   }
@@ -428,6 +442,7 @@ describe('Phase 2.4 tenant isolation', () => {
               ($1, $3, 'case.approve'),
               ($1, $3, 'document.read_sensitive'),
               ($1, $4, 'member.manage'),
+              ($1, $4, 'workspace.manage'),
               ($1, $5, 'member.manage')`,
       [workspaceIds[0], roleId, approverRoleId, ownerRoleId, adminRoleId],
     );
@@ -436,7 +451,8 @@ describe('Phase 2.4 tenant isolation', () => {
        VALUES ($1, $2, 'case.read'),
               ($1, $2, 'case.approve'),
               ($1, $2, 'document.read_sensitive'),
-              ($1, $2, 'member.manage')`,
+              ($1, $2, 'member.manage'),
+              ($1, $2, 'workspace.manage')`,
       [workspaceIds[1], foreignOwnerRoleId],
     );
     await adminPool.query(
@@ -1605,4 +1621,80 @@ describe('Phase 2.4 tenant isolation', () => {
     expect(await workspaceSnapshot(workspaceIds[0])).toBe(snapshotA);
     expect(await workspaceSnapshot(workspaceIds[1])).toBe(snapshotB);
   }, 30_000);
+  it('document policy API: owner sets a policy, viewer cannot, other workspace never sees it (3.5c)', async () => {
+    assert.ok(app);
+    const as = (token: string, workspace: string) => ({
+      authorization: `Bearer ${token}`,
+      'x-workspace-id': workspace,
+    });
+    const put = (token: string, subtype: string, payload: unknown, workspace = workspaceIds[0]!) =>
+      app!.inject({
+        method: 'PUT',
+        url: `/v1/document-policies/${subtype}`,
+        headers: as(token, workspace),
+        payload: payload as Record<string, unknown>,
+      });
+    const body = {
+      collect_mode: 'required',
+      require_masked: false,
+      purpose: 'PAN is needed for tax deduction at source',
+    };
+
+    // Authorization comes before validation: a viewer gets 403 even with a bad body.
+    expect((await put(viewerToken, 'pan', body)).statusCode).toBe(403);
+    expect((await put(viewerToken, 'pan', { nonsense: 1 })).statusCode).toBe(403);
+
+    const ok = await put(ownerToken, 'pan', body);
+    expect(ok.statusCode, ok.body).toBe(200);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/v1/document-policies',
+      headers: as(viewerToken, workspaceIds[0]!),
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    const items = list.json().items as Array<Record<string, unknown>>;
+    expect(items.find((i) => i.doc_subtype === 'pan')).toMatchObject({
+      collect_mode: 'required',
+      configured: true,
+    });
+    expect(items.find((i) => i.doc_subtype === 'passport')).toMatchObject({
+      collect_mode: 'not_collected',
+      configured: false,
+    });
+    const names = items.map((i) => i.doc_subtype);
+    expect(names).not.toContain('police_verification');
+    expect(names).not.toContain('caste_community_certificate');
+
+    // Another workspace is unaffected.
+    const other = await app.inject({
+      method: 'GET',
+      url: '/v1/document-policies',
+      headers: as(foreignToken, workspaceIds[1]!),
+    });
+    if (other.statusCode === 200) {
+      const o = other.json().items as Array<Record<string, unknown>>;
+      expect(o.find((i) => i.doc_subtype === 'pan')).toMatchObject({ configured: false });
+    }
+
+    // Rules: purpose is mandatory, Aadhaar must be masked, unknown/special types cannot be enabled.
+    expect((await put(ownerToken, 'pan', { collect_mode: 'optional' })).statusCode).toBe(422);
+    expect(
+      (await put(ownerToken, 'aadhaar', { collect_mode: 'optional', purpose: 'x'.repeat(12) }))
+        .statusCode,
+    ).toBe(422);
+    expect((await put(ownerToken, 'pan', { ...body, extra: 1 })).statusCode).toBe(422);
+    for (const t of ['police_verification', 'caste_community_certificate', 'unknown', 'nope']) {
+      expect((await put(ownerToken, t, body)).statusCode, t).toBe(404);
+    }
+
+    // The app pool in this file keeps one outer transaction, so read through it (not adminPool).
+    const audit = await withTenant(appPool, workspaceIds[0]!, ownerUserId, (client) =>
+      client.query(
+        `SELECT payload::text AS p FROM audit_events WHERE action = 'document_policy.updated'`,
+      ),
+    );
+    expect(audit.rows).toHaveLength(1);
+    expect(audit.rows[0].p).toContain('"collect_mode": "required"');
+  });
 });

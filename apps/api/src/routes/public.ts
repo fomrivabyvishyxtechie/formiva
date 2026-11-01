@@ -5,7 +5,14 @@ import { z } from 'zod';
 import type { FormDefinition } from '@formiva/contracts';
 import { withTenant } from '@formiva/db';
 import { getOrCreateCorrelationId } from '@formiva/observability';
-import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
+import {
+  auditSafe,
+  httpError,
+  loadPublishedForm,
+  loadSlotPolicies,
+  notFound,
+  slotAllowed,
+} from './public-shared.js';
 import { registerSubmitRoute } from './public-submit.js';
 import { registerUploadRoute } from './public-uploads.js';
 import type { UploadSigner } from '../services/object-store.js';
@@ -144,6 +151,7 @@ export async function registerPublicRoutes(
 
       const body = await withTenant(pool, resolved.workspaceId, null, async (client) => {
         const form = await loadPublishedForm(client, resolved.formVersionId);
+        const policies = await loadSlotPolicies(client, form);
         let draft = {
           case_id: null as string | null,
           status: 'draft',
@@ -196,7 +204,23 @@ export async function registerPublicRoutes(
             status: 'published',
             privacy_notice_version: form.noticeVersion,
             fields: form.definition.fields,
-            slots: form.definition.slots,
+            // Only document types this workspace collects are asked for, each with its stated purpose.
+            slots: form.definition.slots
+              .filter((slot) => slotAllowed(slot, policies))
+              .map((slot) => {
+                const policy = slot.doc_subtype ? policies.get(slot.doc_subtype) : undefined;
+                return policy
+                  ? {
+                      ...slot,
+                      policy: {
+                        collect_mode: policy.collect_mode,
+                        require_masked: policy.require_masked,
+                        purpose: policy.purpose,
+                        retain_days: policy.retain_days,
+                      },
+                    }
+                  : slot;
+              }),
           },
           draft,
           correlation_id: correlationId,

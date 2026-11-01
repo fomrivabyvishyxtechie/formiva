@@ -36,6 +36,82 @@ export const DOC_CLASS_ENUM = [
   'unknown',
 ] as const;
 
+// Document types a form slot may ask for. Mirrors the catalog in migration 007 (a test compares them).
+// Caste/community certificates and police verification are left out on purpose: a form cannot
+// ask for them (Government Documents Policy, ADR-14 as applied by ADR-27).
+export const DOC_SUBTYPES = {
+  aadhaar: {
+    doc_class: 'identity',
+    government_issued: true,
+    default_sensitivity: 'highly_sensitive',
+  },
+  pan: { doc_class: 'identity', government_issued: true, default_sensitivity: 'highly_sensitive' },
+  passport: {
+    doc_class: 'identity',
+    government_issued: true,
+    default_sensitivity: 'highly_sensitive',
+  },
+  driving_licence: {
+    doc_class: 'identity',
+    government_issued: true,
+    default_sensitivity: 'highly_sensitive',
+  },
+  voter_id: {
+    doc_class: 'identity',
+    government_issued: true,
+    default_sensitivity: 'highly_sensitive',
+  },
+  uan_epf: { doc_class: 'employment', government_issued: true, default_sensitivity: 'sensitive' },
+  esic: { doc_class: 'employment', government_issued: true, default_sensitivity: 'sensitive' },
+  itr_ack: { doc_class: 'tax', government_issued: true, default_sensitivity: 'sensitive' },
+  form16: { doc_class: 'tax', government_issued: false, default_sensitivity: 'sensitive' },
+  education_certificate: {
+    doc_class: 'education',
+    government_issued: false,
+    default_sensitivity: 'sensitive',
+  },
+  address_proof: {
+    doc_class: 'address',
+    government_issued: false,
+    default_sensitivity: 'sensitive',
+  },
+  bank_cancelled_cheque: {
+    doc_class: 'bank',
+    government_issued: false,
+    default_sensitivity: 'highly_sensitive',
+  },
+  bank_passbook: {
+    doc_class: 'bank',
+    government_issued: false,
+    default_sensitivity: 'highly_sensitive',
+  },
+  payslip: { doc_class: 'employment', government_issued: false, default_sensitivity: 'sensitive' },
+  experience_letter: {
+    doc_class: 'employment',
+    government_issued: false,
+    default_sensitivity: 'sensitive',
+  },
+  relieving_letter: {
+    doc_class: 'employment',
+    government_issued: false,
+    default_sensitivity: 'sensitive',
+  },
+  offer_letter: {
+    doc_class: 'employment',
+    government_issued: false,
+    default_sensitivity: 'sensitive',
+  },
+  photo: { doc_class: 'photo', government_issued: false, default_sensitivity: 'sensitive' },
+  other: { doc_class: 'other', government_issued: false, default_sensitivity: 'sensitive' },
+} as const;
+export type DocSubtype = keyof typeof DOC_SUBTYPES;
+export const DOC_SUBTYPE_KEYS = Object.keys(DOC_SUBTYPES) as [DocSubtype, ...DocSubtype[]];
+/** Never sent to AI extraction, whatever the workspace policy says (ADR-14). */
+export const NO_AI_SUBTYPES: readonly string[] = [
+  'caste_community_certificate',
+  'police_verification',
+];
+
 // ASCII snake_case only: blocks unicode look-alikes, "__proto__", "constructor" style keys.
 const RESERVED_KEYS = new Set([
   'constructor',
@@ -87,6 +163,7 @@ export const docSlotSchema = z
       .positive()
       .max(25 * 1024 * 1024),
     doc_class: z.enum(DOC_CLASS_ENUM),
+    doc_subtype: z.enum(DOC_SUBTYPE_KEYS).optional(),
   })
   .strict();
 
@@ -152,8 +229,15 @@ export function validateFormDefinition(def: unknown): {
   for (const s of slots) {
     if (slotKeys.has(s.key)) errors.push({ field: s.key, message: 'Duplicate slot key' });
     slotKeys.add(s.key);
-    if (AADHAAR.test(`${s.key} ${s.label}`) && !/mask/i.test(`${s.key} ${s.label}`)) {
+    const isAadhaar = s.doc_subtype === 'aadhaar' || AADHAAR.test(`${s.key} ${s.label}`);
+    if (isAadhaar && !/mask/i.test(`${s.key} ${s.label}`)) {
       errors.push({ field: s.key, message: 'Aadhaar slots must ask for a masked copy only' });
+    }
+    if (s.doc_subtype && DOC_SUBTYPES[s.doc_subtype].doc_class !== s.doc_class) {
+      errors.push({
+        field: s.key,
+        message: `Document type ${s.doc_subtype} belongs to class ${DOC_SUBTYPES[s.doc_subtype].doc_class}`,
+      });
     }
   }
   return { valid: errors.length === 0, errors };
@@ -212,3 +296,41 @@ export function visibleKeys(
   };
   return new Set(fields.filter((f) => visit(f.field_key, new Set())).map((f) => f.field_key));
 }
+
+// ---- Government Documents Policy API (3.5c) ----
+
+export const COLLECT_MODES = ['not_collected', 'optional', 'required'] as const;
+
+/** Body of PUT /v1/document-policies/:doc_subtype. Mirrors the database checks. */
+export const documentPolicyBodySchema = z
+  .object({
+    collect_mode: z.enum(COLLECT_MODES),
+    require_masked: z.boolean().default(false),
+    store_file: z.boolean().default(true),
+    retain_days: z.number().int().positive().max(36500).nullable().default(null),
+    purpose: z.string().trim().max(500).default(''),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    if (v.collect_mode !== 'not_collected' && v.purpose.length < 10) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['purpose'],
+        message: 'State the purpose for collecting this document (at least 10 characters).',
+      });
+    }
+  });
+export type DocumentPolicyBody = z.infer<typeof documentPolicyBodySchema>;
+
+export const documentPolicySchema = z.object({
+  doc_subtype: z.enum(DOC_SUBTYPE_KEYS),
+  doc_class: z.string(),
+  government_issued: z.boolean(),
+  collect_mode: z.enum(COLLECT_MODES),
+  require_masked: z.boolean(),
+  store_file: z.boolean(),
+  retain_days: z.number().int().nullable(),
+  purpose: z.string(),
+  configured: z.boolean(),
+});
+export const documentPolicyListSchema = z.object({ items: z.array(documentPolicySchema) });

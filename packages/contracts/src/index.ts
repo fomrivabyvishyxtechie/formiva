@@ -90,8 +90,20 @@ export {
   computeSchemaHash,
   toCanonicalJSON,
   visibleKeys,
+  DOC_SUBTYPES,
+  DOC_SUBTYPE_KEYS,
+  NO_AI_SUBTYPES,
+  COLLECT_MODES,
+  documentPolicyBodySchema,
+  documentPolicySchema,
+  documentPolicyListSchema,
 } from './forms.js';
-export type { FormDefinition, FormValidationError } from './forms.js';
+export type {
+  FormDefinition,
+  FormValidationError,
+  DocSubtype,
+  DocumentPolicyBody,
+} from './forms.js';
 export {
   invitationRequestSchema,
   invitationAcceptRequestSchema,

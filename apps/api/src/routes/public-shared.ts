@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import {
+  DOC_SUBTYPES,
   formDefinitionSchema,
   validateFormDefinition,
   type FormDefinition,
@@ -67,4 +68,43 @@ export async function auditSafe(
     JSON.stringify(payload),
     UUID.test(correlationId) ? correlationId : null,
   ]);
+}
+
+export interface SlotPolicy {
+  collect_mode: 'not_collected' | 'optional' | 'required';
+  require_masked: boolean;
+  purpose: string;
+  retain_days: number | null;
+}
+type Slot = FormDefinition['slots'][number];
+
+/** The workspace's document policy for each document type the form's slots ask for (row-level security scopes it). */
+export async function loadSlotPolicies(
+  client: PoolClient,
+  form: PublishedForm,
+): Promise<Map<string, SlotPolicy>> {
+  const keys = [
+    ...new Set(form.definition.slots.flatMap((s) => (s.doc_subtype ? [s.doc_subtype] : []))),
+  ];
+  if (keys.length === 0) return new Map();
+  const r = await client.query<SlotPolicy & { doc_subtype: string }>(
+    `SELECT doc_subtype, collect_mode, require_masked, purpose, retain_days
+       FROM document_type_policies WHERE doc_subtype = ANY($1::text[])`,
+    [keys],
+  );
+  return new Map(r.rows.map((row) => [row.doc_subtype, row]));
+}
+
+/**
+ * A slot is offered only when the workspace allows its document type. A government-issued type needs
+ * an opt-in policy row (fail closed, Government Documents Policy); other types are allowed unless a
+ * policy row says not_collected.
+ */
+export function slotAllowed(slot: Slot, policies: Map<string, SlotPolicy>): boolean {
+  if (!slot.doc_subtype) return true;
+  const policy = policies.get(slot.doc_subtype);
+  if (DOC_SUBTYPES[slot.doc_subtype].government_issued) {
+    return policy !== undefined && policy.collect_mode !== 'not_collected';
+  }
+  return policy === undefined || policy.collect_mode !== 'not_collected';
 }

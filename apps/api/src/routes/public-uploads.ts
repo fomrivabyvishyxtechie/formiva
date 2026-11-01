@@ -7,7 +7,15 @@ import { getOrCreateCorrelationId } from '@formiva/observability';
 import { resolveRespondentToken, hashRespondentToken } from '../services/respondent-tokens.js';
 import type { UploadSigner } from '../services/object-store.js';
 import { MAX_DOCUMENTS_PER_CASE, checkUpload } from '../services/upload-policy.js';
-import { auditSafe, httpError, loadPublishedForm, notFound } from './public-shared.js';
+import { DOC_SUBTYPES } from '@formiva/contracts';
+import {
+  auditSafe,
+  httpError,
+  loadPublishedForm,
+  loadSlotPolicies,
+  notFound,
+  slotAllowed,
+} from './public-shared.js';
 
 const UPLOAD_LINK_SECONDS = 300;
 
@@ -18,6 +26,8 @@ const body = z
     filename: z.string().min(1).max(300),
     mime_type: z.string().min(1).max(100),
     size_bytes: z.number().int().positive(),
+    /** The respondent confirms the copy is masked (Aadhaar). Required when the policy demands a masked copy. */
+    masked_copy_confirmed: z.boolean().optional(),
   })
   .strict();
 
@@ -57,6 +67,23 @@ export function registerUploadRoute(app: FastifyInstance, deps: UploadRouteDeps)
         const form = await loadPublishedForm(client, resolved.formVersionId);
         const slot = form.definition.slots.find((s) => s.key === input.slot_key);
         if (!slot) throw httpError(422, 'unknown_slot', 'Unknown upload slot.');
+        // Government Documents Policy: the workspace must allow this document type (fail closed).
+        const policies = await loadSlotPolicies(client, form);
+        if (!slotAllowed(slot, policies)) {
+          throw httpError(
+            422,
+            'document_type_not_collected',
+            'This form does not accept that document.',
+          );
+        }
+        const policy = slot.doc_subtype ? policies.get(slot.doc_subtype) : undefined;
+        if (policy?.require_masked && input.masked_copy_confirmed !== true) {
+          throw httpError(
+            422,
+            'masked_copy_required',
+            'Upload a masked copy (first 8 digits hidden) and confirm that it is masked.',
+          );
+        }
         const check = checkUpload({
           filename: input.filename,
           mimeType: input.mime_type,
@@ -139,8 +166,8 @@ export function registerUploadRoute(app: FastifyInstance, deps: UploadRouteDeps)
         await client.query(
           `INSERT INTO case_documents
              (id, workspace_id, case_id, bucket, object_key, original_filename, mime_type, size_bytes,
-              doc_class, status, slot_key, idempotency_key_hash)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending_upload', $10, $11)`,
+              doc_class, status, slot_key, idempotency_key_hash, doc_subtype, sensitivity)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending_upload', $10, $11, $12, $13)`,
           [
             documentId,
             resolved.workspaceId,
@@ -153,6 +180,8 @@ export function registerUploadRoute(app: FastifyInstance, deps: UploadRouteDeps)
             slot.doc_class,
             input.slot_key,
             keyHash,
+            slot.doc_subtype ?? null,
+            slot.doc_subtype ? DOC_SUBTYPES[slot.doc_subtype].default_sensitivity : 'sensitive',
           ],
         );
         // Metadata only: no file name (it can hold personal data).
@@ -163,6 +192,7 @@ export function registerUploadRoute(app: FastifyInstance, deps: UploadRouteDeps)
           {
             document_id: documentId,
             slot_key: input.slot_key,
+            doc_subtype: slot.doc_subtype ?? null,
             mime_type: input.mime_type,
             size_bytes: input.size_bytes,
           },
