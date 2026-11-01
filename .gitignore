@@ -25,3 +25,7 @@ coverage/
 next-env.d.ts
 test-results/
 playwright-report/
+
+# generated synthetic corpus (see tests/fixtures/generator/README.md)
+tests/fixtures/generated/
+__pycache__/
