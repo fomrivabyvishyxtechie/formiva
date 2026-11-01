@@ -28,7 +28,7 @@ function talk(
   });
 }
 
-// Vendor claim to verify with a real clamd: INSTREAM framing (4-byte big-endian length per chunk, zero-length end)
+// Verified against a real ClamAV 1.5.4 on 2026-11-01 (tests/security/clamav-live.test.ts): INSTREAM framing (4-byte big-endian length per chunk, zero-length end)
 // and replies "stream: OK" / "stream: <name> FOUND" / "... ERROR". clamd refuses streams above its StreamMaxLength.
 export function createClamdScanner(opts: {
   host: string;
