@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formDefinitionSchema } from '@formiva/contracts';
 import { fromApiValues, toApiValues, type Values } from '../lib/form-logic';
+import { createUploads, type SlotPolicy } from '../lib/upload';
 import { FormRenderer, type ServerDraft } from './FormRenderer';
 
 type Loaded = {
@@ -10,6 +11,7 @@ type Loaded = {
   definition: unknown;
   noticeVersion: string | null;
   consentRecorded: boolean;
+  slotPolicies: Record<string, SlotPolicy>;
   revision: number;
   values: Record<string, unknown>;
 };
@@ -23,6 +25,22 @@ const MESSAGES: Record<number, string> = {
   404: 'This link is not valid or has expired. Ask the person who sent it for a new one.',
   429: 'Too many requests. Wait a minute and reload this page.',
 };
+
+/** The API adds a `policy` to each slot; the strict form definition does not allow it, so split it off. */
+function splitSlots(raw: unknown): { slots: unknown[]; policies: Record<string, SlotPolicy> } {
+  const slots: unknown[] = [];
+  const policies: Record<string, SlotPolicy> = {};
+  for (const item of Array.isArray(raw) ? raw : []) {
+    const { policy, ...slot } = item as { key?: string; policy?: Partial<SlotPolicy> };
+    slots.push(slot);
+    if (slot.key && policy)
+      policies[slot.key] = {
+        require_masked: policy.require_masked === true,
+        purpose: typeof policy.purpose === 'string' ? policy.purpose : '',
+      };
+  }
+  return { slots, policies };
+}
 
 /** Turns the API's "Missing required answers: a, b." into the labels the person sees. */
 function missingLabels(detail: unknown, def: unknown): string {
@@ -69,13 +87,15 @@ export function PublicForm({ token }: { token: string }) {
           return;
         }
         if (live) {
+          const { slots, policies } = splitSlots(body.form?.slots);
           setState({
             kind: 'ready',
             data: {
               name: String(body.form?.name ?? 'Your form'),
-              definition: { fields: body.form?.fields, slots: body.form?.slots },
+              definition: { fields: body.form?.fields, slots },
               noticeVersion: body.form?.privacy_notice_version ?? null,
               consentRecorded: body.draft?.consent_recorded === true,
+              slotPolicies: policies,
               revision: revision.current,
               values: body.draft?.values ?? {},
             },
@@ -169,6 +189,7 @@ export function PublicForm({ token }: { token: string }) {
     }
   }, [data, token]);
 
+  const uploads = useMemo(() => createUploads(token), [token]);
   const server = useMemo<ServerDraft | undefined>(
     () =>
       data
@@ -176,11 +197,13 @@ export function PublicForm({ token }: { token: string }) {
             initialValues: fromApiValues(fields, data.values),
             noticeVersion: data.noticeVersion,
             consentRecorded: data.consentRecorded,
+            uploads,
+            slotPolicies: data.slotPolicies,
             onSave,
             onSubmit,
           }
         : undefined,
-    [data, fields, onSave, onSubmit],
+    [data, fields, onSave, onSubmit, uploads],
   );
 
   if (state.kind === 'loading') return <p role="status">Loading your form…</p>;

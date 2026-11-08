@@ -44,11 +44,11 @@ pnpm exec next dev -p 3001
 1. Open the link. You should see "Synthetic onboarding form" with a privacy-notice tick box.
 2. Press Save draft without ticking the box: it must refuse and say so.
 3. Tick the box, type a name, press Save draft: "Draft saved." Reload the page: the name is still there.
-4. "Private notes" is saved with the draft but never shown back to you after a reload. The bank account and file fields are hidden (not available yet).
+4. "Private notes" is saved with the draft but never shown back to you after a reload. The bank account field is hidden (not available yet). The file box works only with real storage (see Test 3 in `phase-3-exit-tests.md`); with the fake storage settings below, choosing a file ends in "The upload did not finish".
 5. Open the same link on your phone browser (same Wi-Fi, use your PC's address instead of `localhost`) and check the layout.
 6. Change one character in the link: you must see the neutral "not valid or has expired" message.
 
-## Upload request (API only, no web control yet)
+## Upload request (API only)
 
 After step 3, in a new PowerShell window (replace `<TOKEN>` with the 64 characters from your link):
 

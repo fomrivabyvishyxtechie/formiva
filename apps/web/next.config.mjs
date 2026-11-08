@@ -2,12 +2,27 @@
 // until a nonce-based CSP is added (tracked in docs/evidence/phase-3/prompt-3.1b-web.md).
 const isProd = process.env.NODE_ENV === 'production';
 
+// Uploads go from the browser straight to storage (ADR-28). Set UPLOAD_CONNECT_ORIGIN at build time
+// to the storage origin, e.g. https://<bucket>.<account>.r2.cloudflarestorage.com. Only a plain
+// https origin is accepted; anything else is ignored so a typo cannot widen the policy.
+function uploadOrigin() {
+  try {
+    const u = new URL(process.env.UPLOAD_CONNECT_ORIGIN ?? '');
+    return u.protocol === 'https:' &&
+      u.origin === (process.env.UPLOAD_CONNECT_ORIGIN ?? '').replace(/\/+$/, '')
+      ? u.origin
+      : '';
+  } catch {
+    return '';
+  }
+}
+
 const csp = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
-  "connect-src 'self'",
+  ["connect-src 'self'", uploadOrigin()].filter(Boolean).join(' '),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

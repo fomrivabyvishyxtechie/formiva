@@ -23,12 +23,17 @@ import {
   type Slot,
   type Values,
 } from '../lib/form-logic';
+import { isPending, type SlotPolicy, type UploadedDoc, type Uploads } from '../lib/upload';
+import { UploadSlot, useDocuments } from './UploadSlot';
 
 /** When set, answers are saved to the server draft (public link) instead of this browser. */
 export type ServerDraft = {
   initialValues: Values;
   noticeVersion: string | null;
   consentRecorded: boolean;
+  uploads: Uploads;
+  /** Document policy per slot key (masked copy needed, purpose text). */
+  slotPolicies: Record<string, SlotPolicy>;
   onSave: (values: Values, sendConsent: boolean) => Promise<{ ok: boolean; message?: string }>;
   /** Final submit. The answers have just been saved; on success the page replaces the form. */
   onSubmit: () => Promise<{ ok: boolean; message?: string }>;
@@ -57,6 +62,15 @@ export function FormRenderer({
 
 type Problem = { id: string; label: string; message: string };
 
+/** Submit needs a checked file in every required slot, and nothing still being checked. */
+function serverSlotError(slot: Slot, all: UploadedDoc[]): string | null {
+  const mine = all.filter((d) => d.slot_key === slot.key);
+  if (mine.some(isPending)) return 'Wait until this file has been checked.';
+  if (mine.some((d) => d.state === 'ready')) return null;
+  if (mine.length > 0) return 'Remove the file that was not accepted and choose a different one.';
+  return slot.required ? `Attach ${slot.label.toLowerCase()}` : null;
+}
+
 function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft }) {
   const [values, setValues] = useState<Values>(server?.initialValues ?? {});
   const [consent, setConsent] = useState(false);
@@ -70,6 +84,8 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
   const [hash, setHash] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const summaryRef = useRef<HTMLDivElement>(null);
+  const [busy, setBusy] = useState<Record<string, string>>({});
+  const { docs, refresh: refreshDocs } = useDocuments(server?.uploads);
 
   // Work out the schema hash, then restore any saved (non-sensitive) answers.
   useEffect(() => {
@@ -99,7 +115,7 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
     (f) => shown.has(f.field_key) && (!server || serverSavable(f)),
   );
   const withheld = server
-    ? def.fields.some((f) => shown.has(f.field_key) && !serverSavable(f)) || def.slots.length > 0
+    ? def.fields.some((f) => shown.has(f.field_key) && !serverSavable(f))
     : false;
 
   const problems: Problem[] = [];
@@ -114,8 +130,8 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
       problems.push({ id: `f-${f.field_key}`, label: f.label, message: msg });
     }
   }
-  for (const s of server ? [] : def.slots) {
-    const msg = slotError(s, files[`s-${s.key}`]);
+  for (const s of def.slots) {
+    const msg = server ? serverSlotError(s, docs) : slotError(s, files[`s-${s.key}`]);
     if (msg) {
       errorFor[`s-${s.key}`] = msg;
       problems.push({ id: `s-${s.key}`, label: s.label, message: msg });
@@ -133,6 +149,24 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
     setReady(false);
     setValues((prev) => ({ ...prev, [key]: v }));
   };
+
+  // Picking a file saves the draft first: the API needs a draft and the recorded consent.
+  async function pickFile(slot: Slot, file: File, masked: boolean): Promise<string | null> {
+    if (!server) return null;
+    if (!(await saveToServer())) return 'Save your draft first. See the message below.';
+    setBusy((b) => ({ ...b, [slot.key]: file.name }));
+    const result = await server.uploads.start(slot.key, file, masked);
+    await refreshDocs();
+    setBusy((b) => Object.fromEntries(Object.entries(b).filter(([k]) => k !== slot.key)));
+    return result.ok ? null : (result.message ?? 'Could not upload this file.');
+  }
+
+  async function removeFile(doc: UploadedDoc): Promise<string | null> {
+    if (!server) return null;
+    const result = await server.uploads.remove(doc.document_id);
+    await refreshDocs();
+    return result.ok ? null : (result.message ?? 'Could not remove the file.');
+  }
 
   async function saveToServer(): Promise<boolean> {
     if (!server) return false;
@@ -218,7 +252,7 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
       )}
       {server && withheld && (
         <p className="note" id="withheld-note">
-          File uploads and some protected fields cannot be answered yet. They are not shown here.
+          Some protected fields cannot be answered yet. They are not shown here.
         </p>
       )}
       {server && !consentDone && (
@@ -293,6 +327,20 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
           onFile={(e) => onFile(`s-${s.key}`, e)}
         />
       ))}
+      {server &&
+        def.slots.map((s) => (
+          <UploadSlot
+            key={s.key}
+            slot={s}
+            docs={docs.filter((d) => d.slot_key === s.key)}
+            busyName={busy[s.key]}
+            policy={server.slotPolicies[s.key]}
+            error={showError(`s-${s.key}`)}
+            describedBy={describe(`s-${s.key}`, true)}
+            onPick={(f, m) => pickFile(s, f, m)}
+            onRemove={removeFile}
+          />
+        ))}
 
       {/* Pressing a button must not move focus out of a field: the field's error line would then
           push the buttons down mid-click and the click would be lost. */}

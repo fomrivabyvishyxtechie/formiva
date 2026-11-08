@@ -82,4 +82,45 @@ describe('forwardToApi', () => {
     expect(res.status).toBe(202);
     expect(fetchMock.mock.calls[0]![0]).toBe(`http://api.test/public/v1/forms/${TOKEN}/submit`);
   });
+
+  it('forwards upload requests, file lists and removals; a removal sends no body', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+    const id = '11111111-2222-4333-8444-555555555555';
+    await forwardToApi(
+      new Request('http://web/x', { method: 'POST', body: '{}' }),
+      TOKEN,
+      '/upload-requests',
+    );
+    await forwardToApi(new Request('http://web/x'), TOKEN, '/documents');
+    await forwardToApi(
+      new Request('http://web/x', { method: 'DELETE' }),
+      TOKEN,
+      `/documents/${id}`,
+    );
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      `http://api.test/public/v1/forms/${TOKEN}/upload-requests`,
+      `http://api.test/public/v1/forms/${TOKEN}/documents`,
+      `http://api.test/public/v1/forms/${TOKEN}/documents/${id}`,
+    ]);
+    const del = fetchMock.mock.calls[2]![1];
+    expect(del.method).toBe('DELETE');
+    expect(del.body).toBeUndefined();
+    expect(Object.keys(del.headers).map((k: string) => k.toLowerCase())).not.toContain(
+      'content-type',
+    );
+  });
+
+  it('refuses any other path (no way to reach other API routes through the proxy)', async () => {
+    for (const bad of [
+      '/../healthz',
+      '/documents/../draft',
+      '/documents/not-a-uuid',
+      '/admin',
+      '?x=1',
+    ]) {
+      const res = await forwardToApi(new Request('http://web/x'), TOKEN, bad);
+      expect(res.status, bad).toBe(404);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

@@ -14,6 +14,7 @@ import {
   slotAllowed,
 } from './public-shared.js';
 import { registerSubmitRoute } from './public-submit.js';
+import { registerDocumentRoutes } from './public-documents.js';
 import { registerUploadRoute } from './public-uploads.js';
 import type { UploadSigner } from '../services/object-store.js';
 import { RateLimiter } from '../rate-limiter.js';
@@ -386,5 +387,6 @@ export async function registerPublicRoutes(
     guard,
   });
 
+  registerDocumentRoutes(app, { pool, security, guard });
   registerSubmitRoute(app, { pool, security, guard });
 }
