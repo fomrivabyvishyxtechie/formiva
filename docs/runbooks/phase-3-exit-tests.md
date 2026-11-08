@@ -43,9 +43,64 @@ Clean up when finished: `docker stop formiva-clamav; docker rm formiva-clamav`.
 Result recorded 2026-11-01 (ClamAV 1.5.4, signatures of 25 Oct 2026): the client works against the real clamd; the test string is flagged only when it is the whole file, not when buried in a larger file (that one test signature's behaviour; real malware signatures differ).
 What this does NOT prove: it checks the scanner client against the real ClamAV, not the whole upload path (that is Test 3).
 
-## Test 3: real storage upload (not runnable yet)
-Goal: a real file goes from the browser to a private Cloudflare R2 "quarantine" bucket, the scanner worker checks it, and only a clean file reaches the "documents" bucket.
-Needs, in order: ADR-28 accepted (how the browser may upload: CORS), the upload control built, two R2 buckets (quarantine and documents) with limited tokens, and the scanner worker running next to ClamAV. I will write these steps in full when the upload control is built; nothing to do before then except the R2 setup, which I will walk you through.
+## Test 3: real storage upload (manual, about 45 minutes, needs a Cloudflare account)
+Goal: prove the whole chain with real storage. A real file goes from the browser to a private Cloudflare R2 "quarantine" bucket, the scanner worker checks it with the real ClamAV, and only a clean file reaches the "documents" bucket. It also proves two things I could only assume: that the bucket accepts the browser upload under the CORS rules in ADR-28, and that R2 refuses a file whose size does not match what was signed (both are vendor claims, unverified until you run this).
 
-## Test 4: phone walk-through (not runnable yet)
-Goal: on a 375 px wide phone screen, fill the form, save, close the page, come back from the link, upload a photo, submit, and see the confirmation. Needs the upload control. Steps follow the existing browser steps in `manual-test-public-form.md`, plus the upload.
+Do the parts in order. Use only fake files (any small PNG you make or download; never a real ID).
+
+**Part A: storage (Cloudflare dashboard; menu names may differ, tell me if so)**
+1. R2 > Create bucket: `formiva-quarantine-dev`. Create a second bucket: `formiva-documents-dev`. Leave both private (do not turn on public access or a public domain).
+2. On `formiva-quarantine-dev` > Settings > CORS policy > add this, then save:
+```json
+[
+  {
+    "AllowedOrigins": ["http://localhost:3001"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["content-type"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+No other origin, no `*`, no GET. Do not add CORS to the documents bucket.
+3. R2 > Manage API tokens > Create API token: permission "Object Read & Write", limited to these two buckets only. Copy the Access Key ID and Secret Access Key into a text file kept OUTSIDE the repository. Never paste them into chat, a commit, or a screenshot. (Your account ID is on the R2 overview page.)
+
+**Part B: start everything (four PowerShell windows, `C:\MAIN-DEV-ALL\Formiva`)**
+Window 1: database and form link: same as `manual-test-public-form.md`, "Window 1". Keep the printed link.
+Window 2: antivirus: `docker start formiva-clamav` (if you removed it, repeat Test 2 Window A).
+Window 3: API: same as "Window 2" of `manual-test-public-form.md`, but with your real storage values instead of the fake ones:
+```powershell
+$env:R2_ACCOUNT_ID = "<your account id>"; $env:R2_ACCESS_KEY_ID = "<access key id>"
+$env:R2_SECRET_ACCESS_KEY = "<secret access key>"; $env:R2_QUARANTINE_BUCKET = "formiva-quarantine-dev"
+$env:R2_DOCUMENTS_BUCKET = "formiva-documents-dev"
+```
+Window 4: scanner worker (same database and storage values as the API, plus the antivirus):
+```powershell
+$env:DATABASE_URL = "postgresql://formiva_test:formiva_test_only@127.0.0.1:55432/formiva_test"
+$env:CLAMD_HOST = "127.0.0.1"; $env:CLAMD_PORT = "3310"
+# paste the same R2_* lines as Window 3, then the other settings the API needs (Clerk placeholders, IP_HASH_SECRET) exactly as in Window 3
+cd apps\api
+pnpm run scan-worker
+```
+Window 5: website: "Window 3" of `manual-test-public-form.md` (port 3001; the CORS origin above must match exactly).
+
+**Part C: what to do in the browser (open the link from Window 1)**
+1. Tick the privacy box, type a name, press Save draft.
+2. At "Photo" choose a small PNG. Expect "photo.png: Checking this file…", then within about 10 seconds "Received and checked". PASS if both appear.
+3. In the Cloudflare dashboard: the file must be in `formiva-documents-dev` and gone from `formiva-quarantine-dev`. PASS if so.
+4. Choose a second fake file that is not a real PNG (rename a `.txt` to `.png`). Expect "This file was not accepted…" with no technical reason. Press Remove: the file box returns. PASS if both happen.
+5. Press Submit form with a good file in place. Expect "Form submitted".
+6. Open browser DevTools > Network during step 2. PASS if the PUT goes to `r2.cloudflarestorage.com`, and no file bytes go to `localhost`.
+7. CORS check: in DevTools console on the form page run `fetch("https://<your-bucket-host>/anything")`. It must fail with a CORS error (no read access from a browser). FAIL if it returns data.
+
+**Pass:** steps 2 to 7 behave as written. **If step 2 shows "The upload did not finish":** open DevTools > Console/Network and send me the red message (usually the CORS origin does not match exactly, `http://localhost:3001` versus `http://127.0.0.1:3001`).
+Clean up: delete the two dev buckets and the API token when finished, or keep them for Test 4.
+
+## Test 4: phone walk-through (manual, about 20 minutes, after Test 3 passes)
+Goal: on a real phone, fill the form, save, close the page, come back from the link, upload a photo, submit, and see the confirmation.
+
+The phone cannot use `localhost`, and the CORS rule names one exact origin. So for this test only: find your PC's address on Wi-Fi (`ipconfig`, "IPv4 Address", for example `192.168.1.20`), change the CORS `AllowedOrigins` on `formiva-quarantine-dev` to `http://<that address>:3001`, restart Window 5 with `pnpm exec next dev -p 3001 -H 0.0.0.0`, and allow it through Windows Firewall if asked. Change CORS back to `localhost` afterwards.
+1. On the phone (same Wi-Fi) open `http://<that address>:3001/f/<64 characters>`. The page must fit the screen with no sideways scrolling.
+2. Save a draft, close the browser tab, open the link again: your answers are still there.
+3. Take a photo with the phone camera at "Photo" (or pick one), wait for "Received and checked".
+4. Submit. Expect "Form submitted".
+PASS if all four work. Note anything that is hard to tap, hard to read, or confusing: that is the real result of this test.

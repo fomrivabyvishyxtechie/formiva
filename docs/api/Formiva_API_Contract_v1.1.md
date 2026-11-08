@@ -689,3 +689,10 @@ Create these gradually by step; do not ask an AI coding tool to create the entir
 - `GET /v1/document-policies` (case.read): `{ items: [{ doc_subtype, doc_class, government_issued, collect_mode, require_masked, store_file, retain_days, purpose, configured }] }`.
 - `PUT /v1/document-policies/{doc_subtype}` (workspace.manage): strict body `{ collect_mode, require_masked?, store_file?, retain_days?, purpose? }`. 404 for an unknown or unpermitted type, 422 for rule violations (purpose under 10 characters when collected; Aadhaar without masked copy).
 - Not in `docs/api/openapi.yaml` yet.
+
+
+## Implementation note: Prompt 3.6 (browser upload control, ADR-28)
+
+- `GET /public/v1/forms/{token}/documents`: `{ documents: [{ document_id, slot_key, filename, size_bytes, state }] }`, `state` one of `uploading | checking | ready | not_accepted`. Deleted files are not listed; no internal reason is returned.
+- `DELETE /public/v1/forms/{token}/documents/{document_id}`: soft delete, `200 { document_id, state: "removed" }`; repeating it is a 200. `409 not_draft` after submit, `409 locked` under legal hold, `404` for an unknown link, id or another respondent's file. Audited as `document.removed`.
+- Both are reachable from the browser only through `/api/public/forms/<token>/documents[/<id>]` (ADR-23).

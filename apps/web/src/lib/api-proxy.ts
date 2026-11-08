@@ -2,6 +2,9 @@
 // That keeps the API address out of the browser and needs no CORS (ADR-23).
 const TOKEN = /^[0-9a-f]{64}$/;
 const MAX_BODY = 256 * 1024;
+// The only API paths the browser may reach through this proxy.
+const SUFFIX =
+  /^(|\/draft|\/submit|\/upload-requests|\/documents|\/documents\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 
 const problem = (status: number, title: string) =>
   new Response(JSON.stringify({ status, title }), {
@@ -12,15 +15,15 @@ const problem = (status: number, title: string) =>
 export async function forwardToApi(
   request: Request,
   token: string,
-  suffix: '' | '/draft' | '/submit',
+  suffix: string,
 ): Promise<Response> {
   // A malformed link never reaches the API.
-  if (!TOKEN.test(token)) return problem(404, 'Form link not found.');
+  if (!TOKEN.test(token) || !SUFFIX.test(suffix)) return problem(404, 'Form link not found.');
   const base = process.env.API_BASE_URL;
   if (!base) return problem(503, 'Service unavailable');
 
   let body: string | undefined;
-  if (request.method !== 'GET') {
+  if (request.method === 'POST' || request.method === 'PUT') {
     body = await request.text();
     if (body.length > MAX_BODY) return problem(413, 'Request too large');
   }
