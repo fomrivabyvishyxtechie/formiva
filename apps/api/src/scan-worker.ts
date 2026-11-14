@@ -1,18 +1,29 @@
+import { pathToFileURL } from 'node:url';
 import { Pool } from 'pg';
 import { loadConfig } from '@formiva/config';
 import { createClamdScanner } from './scanner/clamd.js';
 import { processNextDocument, type ScanDeps } from './scanner/process-document.js';
+import { purgeNextDocument } from './scanner/purge-documents.js';
 import { createS3ObjectStore } from './services/object-store.js';
 
 /** Runs until stopped: claim, scan, decide; sleep only when there is nothing to do. */
 export async function runScanLoop(
-  deps: ScanDeps,
+  deps: ScanDeps & { quarantineBucket: string },
   opts: { intervalMs: number; stop: () => boolean },
 ) {
   while (!opts.stop()) {
     let outcome;
     try {
       outcome = await processNextDocument(deps);
+      // Nothing to scan: delete the stored files of removed documents (ADR-29).
+      if (outcome === 'idle') {
+        const purged = await purgeNextDocument({
+          pool: deps.pool,
+          store: deps.store,
+          buckets: [deps.quarantineBucket, deps.documentsBucket],
+        });
+        if (purged !== 'idle') outcome = 'retry';
+      }
     } catch (error) {
       console.error('scan worker error:', error instanceof Error ? error.message : 'unknown');
       outcome = 'idle';
@@ -47,13 +58,15 @@ async function main() {
       }),
       scanner: createClamdScanner({ host: config.CLAMD_HOST, port: config.CLAMD_PORT }),
       documentsBucket: config.R2_DOCUMENTS_BUCKET,
+      quarantineBucket: config.R2_QUARANTINE_BUCKET,
     },
     { intervalMs: 5_000, stop: () => stopping },
   );
   await pool.end();
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL: on Windows argv[1] is C:\... while import.meta.url is file:///C:/..., so a string compare never matches.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error('Scan worker failed to start', error instanceof Error ? error.message : error);
     process.exitCode = 1;

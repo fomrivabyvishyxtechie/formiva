@@ -156,6 +156,8 @@ function ValidForm({ def, server }: { def: FormDefinition; server?: ServerDraft 
     if (!(await saveToServer())) return 'Save your draft first. See the message below.';
     setBusy((b) => ({ ...b, [slot.key]: file.name }));
     const result = await server.uploads.start(slot.key, file, masked);
+    // The file never reached storage: drop the unfinished row so the slot does not stay "uploading".
+    if (!result.ok && result.documentId) await server.uploads.remove(result.documentId);
     await refreshDocs();
     setBusy((b) => Object.fromEntries(Object.entries(b).filter(([k]) => k !== slot.key)));
     return result.ok ? null : (result.message ?? 'Could not upload this file.');

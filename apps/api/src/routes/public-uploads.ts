@@ -201,13 +201,28 @@ export function registerUploadRoute(app: FastifyInstance, deps: UploadRouteDeps)
         return { documentId, objectKey, replay: false };
       });
 
-      const signed = await store.presignUpload({
-        bucket,
-        key: row.objectKey,
-        contentType: input.mime_type,
-        contentLength: input.size_bytes,
-        expiresInSeconds: UPLOAD_LINK_SECONDS,
-      });
+      let signed;
+      try {
+        signed = await store.presignUpload({
+          bucket,
+          key: row.objectKey,
+          contentType: input.mime_type,
+          contentLength: input.size_bytes,
+          expiresInSeconds: UPLOAD_LINK_SECONDS,
+        });
+      } catch (error) {
+        // No link was handed out, so the row would sit as "uploading" forever; remove it, then fail as before.
+        if (!row.replay) {
+          await withTenant(deps.pool, resolved.workspaceId, null, (client) =>
+            client.query(
+              `UPDATE case_documents SET status = 'deleted', deleted_at = now()
+                WHERE id = $1 AND status = 'pending_upload'`,
+              [row.documentId],
+            ),
+          ).catch(() => undefined);
+        }
+        throw error;
+      }
       reply.header('cache-control', 'no-store');
       reply.code(row.replay ? 200 : 201);
       return {
