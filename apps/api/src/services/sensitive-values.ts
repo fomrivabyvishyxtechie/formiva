@@ -17,7 +17,7 @@ export async function storeSensitiveValue(
     plaintext: string;
     source: 'ai_extraction' | 'human_correction' | 'system';
   },
-): Promise<void> {
+): Promise<{ ciphertext: Buffer; keyId: string }> {
   const { ciphertext, keyId } = encryptValue(
     provider,
     {
@@ -43,4 +43,5 @@ export async function storeSensitiveValue(
       input.source,
     ],
   );
+  return { ciphertext, keyId };
 }

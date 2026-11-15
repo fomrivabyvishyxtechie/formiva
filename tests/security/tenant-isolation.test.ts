@@ -92,6 +92,7 @@ const caseIds = [
   randomUUID(),
   randomUUID(),
 ];
+const reviewTaskId = randomUUID();
 const userId = randomUUID();
 const approverUserId = randomUUID();
 const ownerUserId = randomUUID();
@@ -221,6 +222,90 @@ const authorizationCoverage: Record<
     authenticatedAccess: 'tested',
     foreignResource: 404,
   },
+  'GET /v1/review-tasks': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 'not-applicable',
+  },
+  'GET /v1/review-tasks/:task_id': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/review-tasks/:task_id/claim': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/review-tasks/:task_id/release': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/review-tasks/:task_id/correct': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/review-tasks/:task_id/resolve': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'GET /v1/cases/:case_id/values': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/cases/:case_id/values/:field_key/reveal': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'GET /v1/cases/:case_id/activity': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/cases/:case_id/approvals': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'GET /v1/cases/:case_id/approvals': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'GET /v1/approvals': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 'not-applicable',
+  },
+  'POST /v1/approvals/:approval_id/decide': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
+  'POST /v1/approvals/:approval_id/delegate': {
+    missingAuth: 401,
+    insufficientRole: 403,
+    authenticatedAccess: 'tested',
+    foreignResource: 404,
+  },
 };
 
 function readProtectedRoutes(routeTree: string): { method: RouteMethod; path: string }[] {
@@ -300,7 +385,20 @@ function sampleBody(
   if (route.template.endsWith('/rework') || route.template.endsWith('/cancel')) {
     return { reason: 'Synthetic generated isolation check' };
   }
-  return undefined;
+  const tail = route.template.split('/').pop();
+  const bodies: Record<string, Record<string, unknown>> = {
+    correct: {
+      row_version: 1,
+      reason: 'Synthetic generated isolation check',
+      corrections: [{ field: 'synthetic_field', value: 'synthetic value' }],
+    },
+    resolve: { resolution: 'approved' },
+    reveal: { reason: 'Synthetic generated isolation check' },
+    approvals: { workflow_step_key: 'synthetic_step', approver_user_ids: [randomUUID()] },
+    decide: { decision: 'approve' },
+    delegate: { delegate_user_id: randomUUID(), reason: 'Synthetic generated isolation check' },
+  };
+  return route.method === 'POST' ? bodies[tail ?? ''] : undefined;
 }
 
 function authorizedToken(security: RouteSecurity): string {
@@ -308,7 +406,15 @@ function authorizedToken(security: RouteSecurity): string {
   if (permissions.includes('member.manage') || permissions.includes('workspace.manage')) {
     return ownerToken;
   }
-  if (permissions.includes('case.approve') || permissions.includes('document.read_sensitive')) {
+  if (
+    [
+      'case.approve',
+      'document.read_sensitive',
+      'case.review',
+      'case.correct',
+      'case.reassign',
+    ].some((p) => permissions.includes(p))
+  ) {
     return approverToken;
   }
   if (permissions.includes('case.read')) return viewerToken;
@@ -440,6 +546,9 @@ describe('Phase 2.4 tenant isolation', () => {
        VALUES ($1, $2, 'case.read'),
               ($1, $3, 'case.read'),
               ($1, $3, 'case.approve'),
+              ($1, $3, 'case.review'),
+              ($1, $3, 'case.correct'),
+              ($1, $3, 'case.reassign'),
               ($1, $3, 'document.read_sensitive'),
               ($1, $4, 'member.manage'),
               ($1, $4, 'workspace.manage'),
@@ -450,6 +559,9 @@ describe('Phase 2.4 tenant isolation', () => {
       `INSERT INTO role_permissions (workspace_id, role_id, permission_key)
        VALUES ($1, $2, 'case.read'),
               ($1, $2, 'case.approve'),
+              ($1, $2, 'case.review'),
+              ($1, $2, 'case.correct'),
+              ($1, $2, 'case.reassign'),
               ($1, $2, 'document.read_sensitive'),
               ($1, $2, 'member.manage'),
               ($1, $2, 'workspace.manage')`,
@@ -529,6 +641,17 @@ describe('Phase 2.4 tenant isolation', () => {
         fixtureId,
       ],
     );
+    const decisionId = randomUUID();
+    await adminPool.query(
+      `INSERT INTO routing_decisions (id, workspace_id, case_id, decision_key, rule_version, policy_version, action, route)
+       VALUES ($1, $2, $3, $4, 'synthetic-rules', 'synthetic-policy', 'route', 'human_review')`,
+      [decisionId, workspaceIds[0], caseIds[0], `iso-${fixtureId}`],
+    );
+    await adminPool.query(
+      `INSERT INTO review_tasks (id, workspace_id, case_id, routing_decision_id, reason_codes)
+       VALUES ($1, $2, $3, $4, ARRAY['synthetic'])`,
+      [reviewTaskId, workspaceIds[0], caseIds[0], decisionId],
+    );
     await withTenant(appPool, workspaceIds[0], approverUserId, async (client) =>
       client.query(
         `INSERT INTO document_scans (workspace_id, document_id, scanner, scanner_version, result, details)
@@ -564,6 +687,18 @@ describe('Phase 2.4 tenant isolation', () => {
     transactionClient.release();
     if (fixturesCreated) {
       await adminPool.query('DELETE FROM case_documents WHERE id = ANY($1::uuid[])', [documentIds]);
+      await adminPool.query('DELETE FROM review_tasks WHERE case_id = ANY($1::uuid[])', [caseIds]);
+      // routing_decisions is append-only; the superuser fixture cleanup bypasses its trigger for these rows only.
+      const cleaner = await adminPool.connect();
+      try {
+        await cleaner.query('SET session_replication_role = replica');
+        await cleaner.query('DELETE FROM routing_decisions WHERE case_id = ANY($1::uuid[])', [
+          caseIds,
+        ]);
+      } finally {
+        await cleaner.query('RESET session_replication_role');
+        cleaner.release();
+      }
       await adminPool.query('DELETE FROM cases WHERE id = ANY($1::uuid[])', [caseIds]);
       await adminPool.query('DELETE FROM form_template_versions WHERE id = ANY($1::uuid[])', [
         versionIds,
@@ -1582,6 +1717,7 @@ describe('Phase 2.4 tenant isolation', () => {
             workspace_id: workspaceIds[0],
             case_id: caseIds[0],
             member_id: approverUserId,
+            task_id: reviewTaskId,
           }),
           headers,
         });

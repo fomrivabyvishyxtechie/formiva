@@ -12,12 +12,15 @@ import {
 } from '@formiva/observability';
 import { registerWorkspaceRoutes } from './routes/workspaces.js';
 import { registerCaseRoutes } from './routes/cases.js';
+import { registerReviewRoutes } from './routes/reviews.js';
+import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerDocumentPolicyRoutes } from './routes/document-policies.js';
 import { registerInvitationRoutes } from './routes/invitations.js';
 import { registerPublicRoutes } from './routes/public.js';
 import { createS3ObjectStore, type UploadSigner } from './services/object-store.js';
 import { logSerializers, redactUrl } from './log-redaction.js';
 import authPlugin, { type AuthPluginOptions } from './auth.js';
+import type { KeyProvider } from '@formiva/crypto';
 import type { RouteSecurity } from './security-metadata.js';
 
 export async function buildApp(
@@ -25,6 +28,8 @@ export async function buildApp(
   dependencies: {
     pool?: Pool;
     objectStore?: UploadSigner;
+    /** Master-key custody is undecided (D-4), so no production provider exists: reveal and sensitive corrections answer 503 without one. */
+    keyProvider?: KeyProvider;
     auth?: Pick<AuthPluginOptions, 'jwksFetch' | 'testMode' | 'identityLookup'>;
   } = {},
 ) {
@@ -79,6 +84,8 @@ export async function buildApp(
   if (dependencies.pool) {
     await registerWorkspaceRoutes(app, dependencies.pool);
     await registerCaseRoutes(app);
+    await registerReviewRoutes(app, { keyProvider: dependencies.keyProvider });
+    await registerApprovalRoutes(app);
     await registerDocumentPolicyRoutes(app);
     await registerInvitationRoutes(app, dependencies.pool);
     const objectStore =
