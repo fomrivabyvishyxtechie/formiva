@@ -73,6 +73,7 @@ $env:R2_ACCOUNT_ID = "<your account id>"; $env:R2_ACCESS_KEY_ID = "<access key i
 $env:R2_SECRET_ACCESS_KEY = "<secret access key>"; $env:R2_QUARANTINE_BUCKET = "formiva-quarantine-dev"
 $env:R2_DOCUMENTS_BUCKET = "formiva-documents-dev"
 ```
+Bucket settings are the bucket NAMES only (`formiva-quarantine-dev`), never the address shown on the Cloudflare page; the API now refuses to start with an address. Put the five R2 lines in one `.ps1` file outside the repository and load it in each window with `. "C:\path\formiva-r2-env.ps1"`.
 Window 4: scanner worker (same database and storage values as the API, plus the antivirus):
 ```powershell
 $env:DATABASE_URL = "postgresql://formiva_test:formiva_test_only@127.0.0.1:55432/formiva_test"
@@ -91,6 +92,8 @@ Window 5: website: "Window 3" of `manual-test-public-form.md` (port 3001; the CO
 5. Press Submit form with a good file in place. Expect "Form submitted".
 6. Open browser DevTools > Network during step 2. PASS if the PUT goes to `r2.cloudflarestorage.com`, and no file bytes go to `localhost`.
 7. CORS check: in DevTools console on the form page run `fetch("https://<your-bucket-host>/anything")`. It must fail with a CORS error (no read access from a browser). FAIL if it returns data.
+
+**Result, run by the founder on 2026-11-08 with real R2 (dev buckets):** steps 2, 3 (accepted file in the documents bucket, none left in quarantine), 5, 6 and 7 PASS; the not-accepted case PASS (a 34-byte text file declared as PNG stayed in quarantine, the respondent saw no reason). Found and fixed: API crashed when a bucket setting held a web address (now refused at start-up); Windows could not start the API or worker (entry check compared a Windows path with a file address); a failed upload left an "uploading" row (now removed). Found and fixed in ADR-29 (PROPOSED): removed files stayed in the documents bucket. Not tested: R2 enforcing the signed size (the scanner refuses a size mismatch anyway; covered by `tests/security/storage-purge.test.ts`), real ClamAV inside this chain.
 
 **Pass:** steps 2 to 7 behave as written. **If step 2 shows "The upload did not finish":** open DevTools > Console/Network and send me the red message (usually the CORS origin does not match exactly, `http://localhost:3001` versus `http://127.0.0.1:3001`).
 Clean up: delete the two dev buckets and the API token when finished, or keep them for Test 4.

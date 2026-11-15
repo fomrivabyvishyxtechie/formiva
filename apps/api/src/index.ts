@@ -1,3 +1,4 @@
+import { pathToFileURL } from 'node:url';
 import Fastify from 'fastify';
 import { Pool } from 'pg';
 
@@ -123,6 +124,9 @@ export async function buildApp(
         ? fastifyError.statusCode
         : 500;
     const serialized = safeSerializeError(error);
+    // A 500 hides its reason from the caller; keep it in the log (redacted) so it can be diagnosed.
+    if (statusCode >= 500)
+      request.log.error({ err: serialized, correlation_id: correlationId }, 'request failed');
     const titles: Record<number, string> = {
       400: 'Bad request',
       401: 'Unauthorized',
@@ -222,7 +226,8 @@ export async function startServer() {
   return app;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// pathToFileURL: on Windows argv[1] is C:\... while import.meta.url is file:///C:/..., so a string compare never matches.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   startServer().catch((error) => {
     console.error('Failed to start API server', error);
     process.exitCode = 1;

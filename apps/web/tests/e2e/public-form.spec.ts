@@ -368,6 +368,20 @@ test('a file that is not accepted shows a plain message with no reason, and can 
   expect(seen.deletes).toBe(1);
 });
 
+test('when the file never reaches storage the unfinished row is removed and the person can try again', async ({
+  page,
+}) => {
+  await mockGet(page, withDraft);
+  await mockPut(page);
+  const seen = await mockUploads(page, ['checking']);
+  await page.route(STORAGE, (route) => route.abort('failed')); // registered last, so it wins
+  await page.goto(URL);
+  await page.locator('#s-photo').setInputFiles(png);
+  await expect(page.locator('#s-photo-error')).toContainText('did not finish');
+  await expect.poll(() => seen.deletes).toBe(1);
+  await expect(page.locator('#s-photo')).toBeVisible(); // the picker is back
+});
+
 test('refuses a wrong type or an oversized file before anything is sent', async ({ page }) => {
   await mockGet(page, withDraft);
   const seen = await mockUploads(page, ['ready']);

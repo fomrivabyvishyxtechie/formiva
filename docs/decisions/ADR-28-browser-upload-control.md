@@ -18,7 +18,7 @@ The API could already issue upload links, scan files and block submit until file
 8. The API adds a `policy` object to a slot (ADR-27). The strict form definition does not allow it, so the page splits it off before validating. (This fixes a bug that would have made any form with a policy-bearing slot fail to render.)
 
 ## Known limits
-- Removal is a soft delete. The object stays in storage until a retention or cleanup job exists (not built). Abandoned uploads (link issued, file never sent, or file sent and never submitted) are also left to that job.
+- Removal is a soft delete. The stored file is deleted by the worker purge described in ADR-29 (PROPOSED); until that is accepted and running, the object stays in storage. Files sent and never submitted are not purged.
 - No upload progress bar: the page shows the state "Uploading…". DESIGN.md asks for per-file progress; this is a gap.
 - Whether R2 enforces the signed `content-length` and the CORS rules exactly as described is a vendor claim, checked only by Test 3 with a real bucket.
 - Drag and drop is not built; only the file picker. Screen-reader behaviour is checked by axe only, not by hand.

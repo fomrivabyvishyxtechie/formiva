@@ -9,7 +9,8 @@ export type UploadedDoc = {
   size_bytes: number;
   state: DocState;
 };
-export type Result = { ok: boolean; message?: string };
+/** `documentId` is set when a file row was created but the file never reached storage, so the caller can remove it. */
+export type Result = { ok: boolean; message?: string; documentId?: string };
 export type SlotPolicy = { require_masked: boolean; purpose: string };
 
 /** What the respondent reads. Internal reasons for a refusal are never shown. */
@@ -69,10 +70,14 @@ export function createUploads(token: string) {
         if (!res.ok) return { ok: false, message: await errorMessage(res) };
         const grant = await res.json();
         // Send exactly the headers the address was signed with, and nothing else.
-        const put = await fetch(grant.url, { method: 'PUT', headers: grant.headers, body: file });
-        return put.ok
-          ? { ok: true }
-          : { ok: false, message: 'The upload did not finish. Try again.' };
+        const gone = grant.document_id as string | undefined;
+        try {
+          const put = await fetch(grant.url, { method: 'PUT', headers: grant.headers, body: file });
+          if (put.ok) return { ok: true };
+        } catch {
+          // fall through: same handling as a refused PUT
+        }
+        return { ok: false, message: 'The upload did not finish. Try again.', documentId: gone };
       } catch {
         return {
           ok: false,

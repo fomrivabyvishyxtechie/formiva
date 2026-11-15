@@ -309,6 +309,32 @@ describe('upload requests (3.3a)', () => {
     expect((await upload(token)).statusCode).toBe(409);
   });
 
+  it('when signing fails the caller gets a 500 and no "uploading" row is left behind', async () => {
+    const broken = await buildApp(
+      { NODE_ENV: 'test', R2_QUARANTINE_BUCKET: 'quarantine-test' },
+      {
+        pool: appPool as never,
+        objectStore: {
+          async presignUpload() {
+            throw new Error('synthetic signing failure');
+          },
+        },
+        auth: { testMode: true },
+      },
+    );
+    try {
+      const token = await newToken(ws.a, versionA);
+      await saveDraft(token);
+      const res = await upload(token, { size_bytes: 100 }, broken);
+      expect(res.statusCode).toBe(500);
+      expect(res.body).not.toContain('synthetic signing failure');
+      const rows = await docs(token);
+      expect(rows.map((r) => r.status)).toEqual(['deleted']);
+    } finally {
+      await broken.close();
+    }
+  });
+
   it('never writes to another workspace', async () => {
     const tokenB = await newToken(ws.b, versionB);
     await saveDraft(tokenB);

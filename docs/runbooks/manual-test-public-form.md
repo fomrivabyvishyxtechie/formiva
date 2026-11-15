@@ -25,7 +25,7 @@ $env:CLERK_SECRET_KEY = "synthetic-not-real"
 # any 32+ character fake value (written in parts so the repository secret scan stays quiet)
 $env:IP_HASH_SECRET = ("synthetic","local","ip","hash","key","0123456789abcdef" -join "-")
 # Fake storage settings: the API can create upload links but nothing can be uploaded to them.
-$env:R2_ACCOUNT_ID = "synthetic-account"; $env:R2_ACCESS_KEY_ID = "synthetic-id"
+$env:R2_ACCOUNT_ID = "0123456789abcdef0123456789abcdef"; $env:R2_ACCESS_KEY_ID = "synthetic-id"
 $env:R2_SECRET_ACCESS_KEY = "synthetic-local-signing-value"; $env:R2_QUARANTINE_BUCKET = "quarantine-dev"
 cd apps\api
 pnpm exec tsx src/index.ts

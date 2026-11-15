@@ -10,5 +10,6 @@ The source package contains ADR-01 through ADR-16. This workspace adds:
 - **ADR-27 — Government Documents Policy in the build (PROPOSED)**: policy-gated document slots, masked-only Aadhaar, caste/community/police always rejected, envelope encryption helper with pluggable key provider (D-4 open), policy API without admin screen.
 - **ADR-28 — Browser upload control (ACCEPTED by the founder)**: direct browser-to-R2 upload with strict per-bucket CORS, CSP `connect-src` extension, list/remove routes, four respondent states, one file per slot.
 
+- **ADR-29 — Delete the stored file when a document is removed (PROPOSED)**: migration 017, worker purge of removed documents from both buckets after a 10-minute grace, start-up checks for storage settings.
 
 Read the individual record in `docs/decisions/` before changing sequencing, scope, infrastructure, data handling, or security boundaries.

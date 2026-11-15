@@ -52,12 +52,13 @@ describe('createUploads', () => {
     expect((await createUploads(TOKEN).start('p', file, false)).message).toContain('Too many');
     vi.stubGlobal('fetch', async (u: string) =>
       u.endsWith('/upload-requests')
-        ? json(201, { url: 'https://s.test/x', headers: {} })
+        ? json(201, { document_id: 'doc-1', url: 'https://s.test/x', headers: {} })
         : new Response('', { status: 403 }),
     );
-    expect((await createUploads(TOKEN).start('p', file, false)).message).toContain(
-      'did not finish',
-    );
+    // The row exists but the file never arrived: the caller gets the id so it can remove the row.
+    const refused = await createUploads(TOKEN).start('p', file, false);
+    expect(refused.message).toContain('did not finish');
+    expect(refused.documentId).toBe('doc-1');
     vi.stubGlobal('fetch', async () => {
       throw new Error('offline');
     });
