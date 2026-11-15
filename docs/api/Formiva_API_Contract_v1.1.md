@@ -696,3 +696,28 @@ Create these gradually by step; do not ask an AI coding tool to create the entir
 - `GET /public/v1/forms/{token}/documents`: `{ documents: [{ document_id, slot_key, filename, size_bytes, state }] }`, `state` one of `uploading | checking | ready | not_accepted`. Deleted files are not listed; no internal reason is returned.
 - `DELETE /public/v1/forms/{token}/documents/{document_id}`: soft delete, `200 { document_id, state: "removed" }`; repeating it is a 200. `409 not_draft` after submit, `409 locked` under legal hold, `404` for an unknown link, id or another respondent's file. Audited as `document.removed`.
 - Both are reachable from the browser only through `/api/public/forms/<token>/documents[/<id>]` (ADR-23).
+
+## Implementation note: Prompts 4.1 and 4.2 (review and approval APIs)
+
+All routes need a Clerk token and a workspace membership; the permission is in brackets. Errors use the standard problem body with a stable `code`.
+
+Review tasks
+- `GET /v1/review-tasks` [case.review]: filters `status`, `priority`, `due_before`, `assignee=me`, `reason`, `sensitivity`, `limit`, `offset`. Default shows open and claimed, ordered by priority, due date, age.
+- `GET /v1/review-tasks/{task_id}` [case.review]: task, routing decisions, the original AI result with confidence components and model/runtime metadata, source evidence, current values (sensitive values masked) and correction history (no ciphertext).
+- `POST .../claim` [case.review]: body `{ row_version? }`. One statement decides the race; `409 task_not_claimable` for the loser. Lease 15 minutes; an expired lease can be taken over. Moves the case `review_queued -> review_in_progress`.
+- `POST .../release` [case.review]: owner (or a holder of case.reassign) only; `409 not_releasable` otherwise.
+- `POST .../correct` [case.correct]: body `{ row_version, reason, corrections: [{ field, value }] }`. Needs a live claim (`409 claim_required`), the current `row_version` (`409 stale_row_version`) and a reason. Appends `human_corrections`, a new `case_values` revision (source `human_correction`) and a superseding `routing_decisions` row; the original AI result and evidence are never touched. Highly sensitive fields need a key provider, else `503 keys_unavailable`.
+- `POST .../resolve` [case.review]: `resolution` is `approved | corrected | quarantined | escalated` (`rework` to the respondent is not built). A reason is required except for `approved`; `corrected` needs an earlier correction. A repeat with the same resolution by the same person is a 200 with `replayed: true`; anything else is `409 already_resolved`. The case moves to `workflow_ready` only when no other task is open.
+
+Values and activity
+- `GET /v1/cases/{case_id}/values` [case.read]: latest revision per field; `sensitive` and `highly_sensitive` values are returned masked.
+- `POST /v1/cases/{case_id}/values/{field_key}/reveal` [document.read_sensitive]: body `{ reason }`. Audited as `case_value.revealed` (who, why, field, revision; never the value). `Cache-Control: no-store`.
+- `GET /v1/cases/{case_id}/activity` [case.read]: review and approval state changes with `correlation_id`, a fixed list of action names and from/to status where recorded. No reasons or actors. `/timeline` is unchanged and stays fully redacted.
+
+Approvals
+- `POST /v1/cases/{case_id}/approvals` [case.reassign]: body `{ workflow_step_key, approver_user_ids[] }`; case must be `workflow_ready` (becomes `approval_pending`); approvers must be active members who hold case.approve. Starts the next `round`. `201`.
+- `GET /v1/cases/{case_id}/approvals` [case.read]; `GET /v1/approvals` [case.approve]: my pending approvals in open rounds.
+- `POST /v1/approvals/{approval_id}/decide` [case.approve]: `decision` `approve | reject | rework`; reason required for reject and rework. Only the assigned approver (`403 not_your_approval`). Reject sends the case to `rejected`; rework sends it to `review_queued` and opens a new review task. A decision on a closed round is `409 round_closed`; a repeat of the same decision is a 200 `replayed`; a different one is `409 already_decided`.
+- `POST /v1/approvals/{approval_id}/delegate` [case.approve]: body `{ delegate_user_id, reason }`; the delegate must be another active approver not already in the round. The original row becomes `delegated` (final) and the delegate gets a new pending row.
+- A fully approved round leaves the case in `approval_pending` with `round_complete: true`. Moving it to `action_executing` belongs to the Phase 5 workflow engine.
+

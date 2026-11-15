@@ -113,3 +113,18 @@ export {
   invitationDeleteParamsSchema,
 } from './invitations.js';
 export type { CaseListQuery, CaseListResponse } from './cases.js';
+export {
+  reviewTaskParamsSchema,
+  reviewTaskListQuerySchema,
+  reviewClaimRequestSchema,
+  reviewCorrectRequestSchema,
+  reviewResolveRequestSchema,
+  caseValuesParamsSchema,
+  caseRevealParamsSchema,
+  caseRevealRequestSchema,
+  approvalRoundRequestSchema,
+  approvalParamsSchema,
+  approvalDecideRequestSchema,
+  approvalDelegateRequestSchema,
+  approvalListQuerySchema,
+} from './reviews.js';

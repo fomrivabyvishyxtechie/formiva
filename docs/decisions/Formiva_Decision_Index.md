@@ -13,3 +13,4 @@ The source package contains ADR-01 through ADR-16. This workspace adds:
 - **ADR-29 — Delete the stored file when a document is removed (PROPOSED)**: migration 017, worker purge of removed documents from both buckets after a 10-minute grace, start-up checks for storage settings.
 
 Read the individual record in `docs/decisions/` before changing sequencing, scope, infrastructure, data handling, or security boundaries.
+- **ADR-30 — Staff web sign-in (PROPOSED)**: Clerk in Next.js, server-side route handlers call the API, no token in browser JS. Blocks Prompt 4.3 until accepted.
